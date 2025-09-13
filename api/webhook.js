@@ -86,7 +86,7 @@ async function classifyStateLog(text) {
 async function summarizeEvent(text) {
   try {
     const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",   // 用小模型摘要即可
+      model: "gpt-4o-mini",   // 小模型，專門做摘要
       messages: [
         {
           role: "system",
@@ -102,7 +102,7 @@ async function summarizeEvent(text) {
     return r.choices[0].message.content.trim();
   } catch (e) {
     console.error("[GPT 摘要錯誤]", e);
-    return text; // fallback：直接回原文
+    return text; // fallback → 出錯時仍保留原文
   }
 }
 
