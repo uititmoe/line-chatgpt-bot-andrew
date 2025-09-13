@@ -86,7 +86,7 @@ async function classifyStateLog(text) {
 async function generateShortPhrase(text) {
   try {
     const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       messages: [
         {
           role: "system",
@@ -150,7 +150,7 @@ export default async function handler(req, res) {
         } else {
           try {
             const r = await openai.chat.completions.create({
-              model: "gpt-4o-mini",
+              model: "gpt-4o",
               messages: [
                 { role: "system", content: SYSTEM_MESSAGE || "你是一個用繁體中文回覆的貼心助理。" },
                 { role: "user", content: userText },
