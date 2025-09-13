@@ -1,3 +1,9 @@
+console.log('ENV CHECK', {
+  hasOpenAI: !!process.env.OPENAI_API_KEY,
+  hasSecret: !!process.env.LINE_CHANNEL_SECRET,
+  hasToken: !!process.env.LINE_CHANNEL_ACCESS_TOKEN
+});
+
 import crypto from 'crypto';
 import OpenAI from 'openai';
 
