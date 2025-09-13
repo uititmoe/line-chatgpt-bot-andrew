@@ -1,6 +1,6 @@
-import { createHmac } from 'node:crypto';
-import OpenAI from 'openai';
-import fs from 'fs';
+const { createHmac } = require('crypto');
+const OpenAI = require('openai');
+const fs = require('fs');
 
 const { LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, OPENAI_API_KEY, SYSTEM_MESSAGE } = process.env;
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
