@@ -66,13 +66,13 @@ async function classifyStateLog(text) {
 async function summarizeEvent(text) {
   try {
     const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       messages: [
         {
           role: "system",
           content: `你是日誌摘要助理。
 請將輸入文字壓縮成一行簡短的事件描述（20字內），避免口語化和贅字。
-只輸出簡潔描述，不要加評論。`,
+只輸出簡潔描述，不要加評論。句末不需加句點。`,
         },
         { role: "user", content: text },
       ],
@@ -89,7 +89,7 @@ async function summarizeEvent(text) {
 async function generateShortPhrase(text) {
   try {
     const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       messages: [
         { role: "system", content: SYSTEM_MESSAGE || "你是一個熟悉 Jean 狀態的助理" },
         {
@@ -161,7 +161,7 @@ export default async function handler(req, res) {
 📌 狀態：${summary}
 📂 主模組：${category.main.join(" + ") || "無"}
 🏷️ 輔助：${category.tags.join(" + ") || "無"}
-✨ 小語：${shortPhrase}`;
+/n ${shortPhrase}`;
 
         } else if (isSummaryRequest(userText)) {
           aiText = "📊 總結功能（可加上統計，但此處略）";
@@ -176,7 +176,7 @@ export default async function handler(req, res) {
 📌 狀態：${summary}
 📂 主模組：${category.main.join(" + ") || "無"}
 🏷️ 輔助：${category.tags.join(" + ") || "無"}
-✨ 小語：${shortPhrase}`;
+/n ${shortPhrase}`;
 
         } else {
           try {
