@@ -1,4 +1,4 @@
-import { createHmac } from "crypto";
+import { createHmac } from "node:crypto";
 import OpenAI from "openai";
 
 const { LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, OPENAI_API_KEY, SYSTEM_MESSAGE } = process.env;
@@ -11,27 +11,6 @@ function verifyLineSignature(rawBody, signature) {
   return hmac === signature;
 }
 
-/** 呼叫 LINE Reply API */
-async function lineReply(replyToken, text) {
-  const url = "https://api.line.me/v2/bot/message/reply";
-  const body = JSON.stringify({
-    replyToken,
-    messages: [{ type: "text", text }],
-  });
-  const headers = {
-    Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
-    "Content-Type": "application/json",
-  };
-
-  console.log("[LINE REPLY] Request", body);
-
-  const resp = await fetch(url, { method: "POST", headers, body });
-  const respText = await resp.text();
-  console.log("[LINE REPLY] Response", { status: resp.status, text: respText });
-
-  return resp.ok;
-}
-
 /** 判斷訊息類型 */
 function isBacklogMessage(text) {
   return text.startsWith("補記");
@@ -40,18 +19,20 @@ function isSummaryRequest(text) {
   return text.includes("總結");
 }
 function isLogCandidate(text) {
-  // 問句排除
   if (/[嗎\?？]$/.test(text)) return false;
   if (text.startsWith("補記") || text.includes("總結")) return false;
-
-  // 常見日誌動詞
-  const verbs = ["起床", "開始", "結束", "出門", "到", "回", "吃", "喝", "買", "畫", "寫", "處理", "做", "打掃", "清理", "看", "睡", "休息", "洗", "完成", "準備"];
+  const verbs = ["起床", "出門", "到", "回", "吃", "喝", "買", "畫", "寫", "處理", "做", "打掃", "清理", "看", "睡", "休息", "洗", "完成", "準備"];
   if (verbs.some((v) => text.includes(v))) return true;
-
-  // 常見狀態語氣
   if (/^我/.test(text) || text.includes("正在") || text.includes("剛")) return true;
-
   return false;
+}
+
+/** 時間解析 */
+function parseDateTime(text) {
+  const now = new Date();
+  const tzOffset = 8 * 60;
+  const taiwanNow = new Date(now.getTime() + (tzOffset - now.getTimezoneOffset()) * 60000);
+  return taiwanNow.toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
 }
 
 /** 分類（主模組＋輔助），沒命中 → fallback */
@@ -74,7 +55,6 @@ async function classifyStateLog(text) {
       ],
       temperature: 0,
     });
-
     return JSON.parse(r.choices[0].message.content.trim());
   } catch (e) {
     console.error("[GPT 分類錯誤]", e);
@@ -101,39 +81,54 @@ async function summarizeEvent(text) {
     return r.choices[0].message.content.trim();
   } catch (e) {
     console.error("[GPT 摘要錯誤]", e);
-    return text; // fallback：出錯時直接回原文
+    return text;
   }
 }
 
-/** 產生小語 */
+/** 小語（30 字內自然短語） */
 async function generateShortPhrase(text) {
   try {
     const r = await openai.chat.completions.create({
-      model: "gpt-4o",
+      model: "gpt-4o-mini",
       messages: [
+        { role: "system", content: SYSTEM_MESSAGE || "你是一個熟悉 Jean 狀態的助理" },
         {
-          role: "system",
-          content: `你是使用者 Jean 的語義同步助理。
-請根據輸入內容，生成一句不超過 30 字的自然短語。
-語氣自然，像熟人對話，可以輕微幽默或鼓勵。`,
+          role: "user",
+          content: `請根據「我現在的狀態是：${text}」，產生一句不超過30字的自然短語。語氣自然，像熟人聊天，避免浮誇或網路流行語，要有摘要感。`,
         },
-        { role: "user", content: text },
       ],
       max_tokens: 50,
     });
     return r.choices[0].message.content.trim();
   } catch (e) {
-    console.error("[GPT 小語錯誤]", e);
+    console.error("[短語生成錯誤]", e);
     return "（狀態已記錄）";
   }
 }
 
-/** 主 Handler */
+/** LINE Reply */
+async function lineReply(replyToken, text) {
+  const url = "https://api.line.me/v2/bot/message/reply";
+  const body = JSON.stringify({ replyToken, messages: [{ type: "text", text }] });
+  const headers = {
+    Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+    "Content-Type": "application/json",
+  };
+
+  console.log("[LINE REPLY] Request", body);
+
+  const resp = await fetch(url, { method: "POST", headers, body });
+  const respText = await resp.text();
+  console.log("[LINE REPLY] Response", { status: resp.status, text: respText });
+
+  return resp.ok;
+}
+
+/** 主處理 */
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
 
-    // 收 raw body
     const chunks = [];
     await new Promise((resolve, reject) => {
       req.on("data", (c) => chunks.push(c));
@@ -154,36 +149,43 @@ export default async function handler(req, res) {
     for (const event of body.events || []) {
       if (event.type === "message" && event.message?.type === "text") {
         const userText = event.message.text.trim();
-        console.log("[DEBUG] 收到訊息：", userText);
-
-        let aiText = "我這邊忙線一下，等等再試。";
+        let aiText;
 
         if (isBacklogMessage(userText)) {
-          const parsedTime = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
+          const parsedTime = parseDateTime(userText);
           const category = await classifyStateLog(userText);
+          const summary = await summarizeEvent(userText);   // ✅ 新增這行
           const shortPhrase = await generateShortPhrase(userText);
-          aiText = `📝 補記：${parsedTime}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
+
+          aiText = `📝 補記：${parsedTime}
+📌 狀態：${summary}
+📂 主模組：${category.main.join(" + ") || "無"}
+🏷️ 輔助：${category.tags.join(" + ") || "無"}
+✨ 小語：${shortPhrase}`;
 
         } else if (isSummaryRequest(userText)) {
           aiText = "📊 總結功能（可加上統計，但此處略）";
 
         } else if (isLogCandidate(userText)) {
+          const parsedTime = parseDateTime(userText);
           const category = await classifyStateLog(userText);
           const summary = await summarizeEvent(userText);
-          const parsedTime = parseDateTime(userText);
           const shortPhrase = await generateShortPhrase(userText);
-          
-          aiText = `🕰️ 已記錄：${parsedTime}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
+
+          aiText = `🕰️ 已記錄：${parsedTime}
+📌 狀態：${summary}
+📂 主模組：${category.main.join(" + ") || "無"}
+🏷️ 輔助：${category.tags.join(" + ") || "無"}
+✨ 小語：${shortPhrase}`;
+
         } else {
           try {
-            const r = await openai.chat.completions.create({
-              model: "gpt-4o",
-              messages: [
-                { role: "system", content: SYSTEM_MESSAGE || "你是一個用繁體中文回覆的貼心助理。" },
-                { role: "user", content: userText },
-              ],
+            const r = await openai.responses.create({
+              model: "gpt-4o", // ✅ 對話回答用 gpt-4o
+              instructions: SYSTEM_MESSAGE || "你是一個用繁體中文回覆的貼心助理。",
+              input: userText,
             });
-            aiText = r.choices[0].message.content.trim();
+            aiText = (r.output_text || "").slice(0, 1900);
           } catch (e) {
             console.error("[OpenAI ERROR]", e);
             aiText = `Echo: ${userText}`;
