@@ -16,21 +16,47 @@ function verifyLineSignature(rawBody, signature) {
   return hmac === signature;
 }
 
+// 呼叫 LINE Reply API
+async function lineReply(replyToken, text) {
+  const url = "https://api.line.me/v2/bot/message/reply";
+  const body = JSON.stringify({
+    replyToken,
+    messages: [{ type: "text", text }],
+  });
+  const headers = {
+    Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+    "Content-Type": "application/json",
+  };
+
+  console.log("[LINE REPLY] Request", body);
+
+  const resp = await fetch(url, { method: "POST", headers, body });
+  const respText = await resp.text();
+  console.log("[LINE REPLY] Response", { status: resp.status, text: respText });
+
+  return resp.ok;
+}
+
 // 判斷訊息類型
 function isBacklogMessage(text) {
   return text.startsWith("補記");
 }
-function isLogMessage(text) {
-  if (
-    text.endsWith("嗎？") || text.endsWith("嗎?") || text.endsWith("?") ||
-    text.startsWith("幫我")
-  ) {
-    return false;
-  }
-  return true;
-}
 function isSummaryRequest(text) {
   return text.includes("總結");
+}
+function isLogCandidate(text) {
+  // 問句排除
+  if (/[嗎\?？]$/.test(text)) return false;
+  if (text.startsWith("補記") || text.includes("總結")) return false;
+
+  // 常見日誌動詞
+  const verbs = ["起床", "出門", "到", "回", "吃", "喝", "買", "畫", "寫", "處理", "做", "打掃", "清理", "看", "睡", "休息", "洗", "完成", "準備"];
+  if (verbs.some((v) => text.includes(v))) return true;
+
+  // 常見狀態語氣
+  if (/^我/.test(text) || text.includes("正在") || text.includes("剛")) return true;
+
+  return false;
 }
 
 // 簡單時間解析
@@ -62,7 +88,7 @@ function parseDateTime(text) {
   return target.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
 }
 
-// ---- 簡化的分類器 (GPT fallback) ----
+// ---- 分類（主模組＋輔助），沒命中 → GPT fallback ----
 async function classifyStateLog(text) {
   try {
     const r = await openai.chat.completions.create({
@@ -70,19 +96,23 @@ async function classifyStateLog(text) {
       messages: [
         {
           role: "system",
-          content:
-            "請將輸入的內容分類到以下其中一個最合適的分類，不要加解釋，只回分類標籤。\n" +
-            "主模組：A. 藝廊工作, B. Podcast, C. 商業漫畫, D. 同人＆委託, E. 空間管理\n" +
-            "輔助分類：📑 行政雜務, 💰 財務／記帳, 📢 宣傳／SNS, 🍽️ 飲食, 🛒 生活採購, 🧘 休息／日常, 💼 社交活動, 💡 構思／規劃, 🎯 興趣／休閒活動, 📝 紀錄／其他"
+          content: `你是日誌分類助理。
+請把輸入訊息分成：
+1. 主模組（五選一：A. 藝廊工作, B. Podcast, C. 商業漫畫, D. 同人與委託, E. 生活日常）
+2. 輔助分類（可多選：行政／財務／SNS／飲食／健康／社交／休息／其他）
+
+只回 JSON，例如：
+{"main":["C. 商業漫畫"], "tags":["📢 宣傳／SNS","🧾 行政"]}`,
         },
-        { role: "user", content: text }
+        { role: "user", content: text },
       ],
-      max_tokens: 30
+      temperature: 0,
     });
-    return r.choices[0].message.content.trim();
+
+    return JSON.parse(r.choices[0].message.content.trim());
   } catch (e) {
     console.error("[GPT 分類錯誤]", e);
-    return "📝 紀錄／其他";
+    return { main: ["E. 生活日常"], tags: ["📝 紀錄／其他"] };
   }
 }
 
@@ -95,7 +125,7 @@ async function generateShortPhrase(text) {
         { role: "system", content: SYSTEM_MESSAGE || "你是一個熟悉 Jean 狀態的助理" },
         {
           role: "user",
-          content: `請根據「我現在的狀態是：${text}」，產生一句不超過30字的自然短語。語氣自然，像熟人聊天，避免浮誇或網路流行語，要有摘要感。`
+          content: `請根據「我現在的狀態是：${text}」，產生一句不超過30字的自然短語。語氣自然，像熟人聊天，避免浮誇或網路流行語，要有摘要感，可以輕微幽默或鼓勵。`
         }
       ],
       max_tokens: 50
@@ -106,6 +136,8 @@ async function generateShortPhrase(text) {
     return "（狀態已記錄）";
   }
 }
+
+
 
 // ---- 總結 ----
 function handleSummary(text) {
@@ -166,75 +198,54 @@ async function lineReply(replyToken, text) {
 // ---- 主處理 ----
 export default async function handler(req, res) {
   try {
-    if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+    if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
 
+    // 收 raw body
     const chunks = [];
     await new Promise((resolve, reject) => {
-      req.on('data', c => chunks.push(c));
-      req.on('end', resolve);
-      req.on('error', reject);
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", resolve);
+      req.on("error", reject);
     });
     const rawBody = Buffer.concat(chunks);
-    const signature = req.headers['x-line-signature'];
+    const signature = req.headers["x-line-signature"];
 
     if (!verifyLineSignature(rawBody, signature)) {
-      console.warn('[SIGNATURE] 驗證失敗');
-      return res.status(403).send('Invalid signature');
+      console.warn("[SIGNATURE] 驗證失敗");
+      return res.status(403).send("Invalid signature");
     }
 
-    const body = JSON.parse(rawBody.toString('utf8'));
-    console.log('[INCOMING BODY]', JSON.stringify(body));
+    const body = JSON.parse(rawBody.toString("utf8"));
+    console.log("[INCOMING BODY]", JSON.stringify(body));
 
     for (const event of body.events || []) {
-      if (event.type === 'message' && event.message?.type === 'text') {
+      if (event.type === "message" && event.message?.type === "text") {
         const userText = event.message.text.trim();
-        console.log("[DEBUG] 收到訊息：", userText);
+        let aiText = "我這邊忙線一下，等等再試。";
 
-        let aiText;
-
+        // 🕹️ 路由判斷
         if (isBacklogMessage(userText)) {
-          const content = userText.replace(/^補記[:：]?\s*/, "");
-          const category = await classifyStateLog(content);
-          const summary = content.slice(0, 15);
-          const parsedTime = parseDateTime(content);
-          const shortPhrase = await generateShortPhrase(content);
-
-          aiText =
-            `📝 補記：${parsedTime}\n` +
-            `📌 狀態：${summary}\n` +
-            `📁 分類：${category}\n` +
-            `✨ 小語：${shortPhrase}`;
-
-          logs.push({ type: "補記", time: parsedTime, summary, category, text: content });
-
-        } else if (isSummaryRequest(userText)) {
-          aiText = handleSummary(userText);
-
-        } else if (isLogMessage(userText)) {
+          const parsedTime = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
           const category = await classifyStateLog(userText);
-          const summary = userText.slice(0, 15);
-          const parsedTime = parseDateTime(userText);
           const shortPhrase = await generateShortPhrase(userText);
-
-          aiText =
-            `🕰️ 已記錄：${parsedTime}\n` +
-            `📌 狀態：${summary}\n` +
-            `📁 分類：${category}\n` +
-            `✨ 小語：${shortPhrase}`;
-
-          logs.push({ type: "紀錄", time: parsedTime, summary, category, text: userText });
-
+          aiText = `📝 補記：${parsedTime}\n📌 狀態：${userText}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n✨ 小語：${shortPhrase}`;
+        } else if (isSummaryRequest(userText)) {
+          aiText = "（總結功能還在開發中，可以先手動整理日誌）";
+        } else if (isLogCandidate(userText)) {
+          const parsedTime = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
+          const category = await classifyStateLog(userText);
+          const shortPhrase = await generateShortPhrase(userText);
+          aiText = `🕰️ 已記錄：${parsedTime}\n📌 狀態：${userText}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n✨ 小語：${shortPhrase}`;
         } else {
           try {
             const r = await openai.responses.create({
-              model: 'gpt-4o-mini',
-              instructions: SYSTEM_MESSAGE || '你是一個用繁體中文回覆的貼心助理。',
-              input: userText
+              model: "gpt-4o-mini",
+              instructions: SYSTEM_MESSAGE || "你是一個用繁體中文回覆的貼心助理。",
+              input: userText,
             });
-            aiText = (r.output_text || '').slice(0, 1900);
+            aiText = (r.output_text || "").slice(0, 1900);
           } catch (e) {
-            console.error('[OpenAI ERROR]', e);
-                // 🔥 fallback: Echo 回應
+            console.error("[OpenAI ERROR]", e);
             aiText = `Echo: ${userText}`;
           }
         }
@@ -242,6 +253,13 @@ export default async function handler(req, res) {
         await lineReply(event.replyToken, aiText);
       }
     }
+
+    res.status(200).end();
+  } catch (e) {
+    console.error("[WEBHOOK ERROR]", e);
+    if (!res.headersSent) res.status(500).end();
+  }
+}
 
     res.status(200).end();
   } catch (e) {
