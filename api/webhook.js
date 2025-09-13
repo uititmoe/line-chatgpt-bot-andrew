@@ -82,6 +82,30 @@ async function classifyStateLog(text) {
   }
 }
 
+/** 簡短摘要（避免照抄原文） */
+async function summarizeEvent(text) {
+  try {
+    const r = await openai.chat.completions.create({
+      model: "gpt-4o-mini",   // 用小模型摘要即可
+      messages: [
+        {
+          role: "system",
+          content: `你是日誌摘要助理。
+請將輸入文字壓縮成一行簡短的事件描述（20字內），避免口語化和贅字。
+只輸出簡潔描述，不要加評論。`
+        },
+        { role: "user", content: text }
+      ],
+      temperature: 0.3
+    });
+
+    return r.choices[0].message.content.trim();
+  } catch (e) {
+    console.error("[GPT 摘要錯誤]", e);
+    return text; // fallback：直接回原文
+  }
+}
+
 /** 產生小語 */
 async function generateShortPhrase(text) {
   try {
@@ -139,14 +163,14 @@ export default async function handler(req, res) {
           const parsedTime = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
           const category = await classifyStateLog(userText);
           const shortPhrase = await generateShortPhrase(userText);
-          aiText = `📝 補記：${parsedTime}\n📌 狀態：${userText}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n✨ 小語：${shortPhrase}`;
+          aiText = `📝 補記：${parsedTime}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
         } else if (isSummaryRequest(userText)) {
           aiText = "（總結功能還在開發中，可以先手動整理日誌）";
         } else if (isLogCandidate(userText)) {
           const parsedTime = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
           const category = await classifyStateLog(userText);
           const shortPhrase = await generateShortPhrase(userText);
-          aiText = `🕰️ 已記錄：${parsedTime}\n📌 狀態：${userText}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n✨ 小語：${shortPhrase}`;
+          aiText = `🕰️ 已記錄：${parsedTime}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
         } else {
           try {
             const r = await openai.chat.completions.create({
