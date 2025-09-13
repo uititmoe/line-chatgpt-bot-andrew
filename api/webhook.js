@@ -1,22 +1,17 @@
-import { createHmac } from 'node:crypto';
-import OpenAI from 'openai';
+import { createHmac } from "crypto";
+import OpenAI from "openai";
 
 const { LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, OPENAI_API_KEY, SYSTEM_MESSAGE } = process.env;
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// ---- 紀錄存在記憶體 (Vercel 無法用 fs) ----
-let logs = [];
-
-// 驗證 LINE 簽章
+/** 驗證 LINE 簽章 */
 function verifyLineSignature(rawBody, signature) {
   if (!LINE_CHANNEL_SECRET || !signature) return false;
-  const hmac = createHmac('sha256', LINE_CHANNEL_SECRET)
-    .update(rawBody)
-    .digest('base64');
+  const hmac = createHmac("sha256", LINE_CHANNEL_SECRET).update(rawBody).digest("base64");
   return hmac === signature;
 }
 
-// 呼叫 LINE Reply API
+/** 呼叫 LINE Reply API */
 async function lineReply(replyToken, text) {
   const url = "https://api.line.me/v2/bot/message/reply";
   const body = JSON.stringify({
@@ -37,7 +32,7 @@ async function lineReply(replyToken, text) {
   return resp.ok;
 }
 
-// 判斷訊息類型
+/** 判斷訊息類型 */
 function isBacklogMessage(text) {
   return text.startsWith("補記");
 }
@@ -59,36 +54,7 @@ function isLogCandidate(text) {
   return false;
 }
 
-// 簡單時間解析
-function parseDateTime(text) {
-  const now = new Date();
-  const tzOffset = 8 * 60;
-  const taiwanNow = new Date(now.getTime() + (tzOffset - now.getTimezoneOffset()) * 60000);
-  let target = new Date(taiwanNow);
-
-  if (text.includes("前天")) target.setDate(target.getDate() - 2);
-  else if (text.includes("昨天")) target.setDate(target.getDate() - 1);
-  else if (text.includes("明天")) target.setDate(target.getDate() + 1);
-
-  const mdMatch = text.match(/(\d{1,2})[\/\-](\d{1,2})/);
-  if (mdMatch) {
-    const month = parseInt(mdMatch[1], 10);
-    const day = parseInt(mdMatch[2], 10);
-    target.setMonth(month - 1);
-    target.setDate(day);
-  }
-
-  const hmMatch = text.match(/(\d{1,2})(?:點|:)(\d{1,2})?/);
-  if (hmMatch) {
-    const hour = parseInt(hmMatch[1], 10);
-    const minute = hmMatch[2] ? parseInt(hmMatch[2], 10) : 0;
-    target.setHours(hour, minute, 0, 0);
-  }
-
-  return target.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
-}
-
-// ---- 分類（主模組＋輔助），沒命中 → GPT fallback ----
+/** 分類（主模組＋輔助），沒命中 → fallback */
 async function classifyStateLog(text) {
   try {
     const r = await openai.chat.completions.create({
@@ -116,86 +82,30 @@ async function classifyStateLog(text) {
   }
 }
 
-// ---- 短語生成 ----
+/** 產生小語 */
 async function generateShortPhrase(text) {
   try {
     const r = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: SYSTEM_MESSAGE || "你是一個熟悉 Jean 狀態的助理" },
         {
-          role: "user",
-          content: `請根據「我現在的狀態是：${text}」，產生一句不超過30字的自然短語。語氣自然，像熟人聊天，避免浮誇或網路流行語，要有摘要感，可以輕微幽默或鼓勵。`
-        }
+          role: "system",
+          content: `你是使用者 Jean 的語義同步助理。
+請根據輸入內容，生成一句不超過 30 字的自然短語。
+語氣自然，像熟人對話，可以輕微幽默或鼓勵。`,
+        },
+        { role: "user", content: text },
       ],
-      max_tokens: 50
+      max_tokens: 50,
     });
     return r.choices[0].message.content.trim();
   } catch (e) {
-    console.error("[短語生成錯誤]", e);
+    console.error("[GPT 小語錯誤]", e);
     return "（狀態已記錄）";
   }
 }
 
-
-
-// ---- 總結 ----
-function handleSummary(text) {
-  if (logs.length === 0) return "目前沒有任何紀錄可供總結。";
-
-  const now = new Date();
-  let filtered = [];
-
-  if (text.includes("一天")) {
-    const today = now.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' });
-    filtered = logs.filter(l => l.time.startsWith(today));
-  } else if (text.includes("這週")) {
-    const weekStart = new Date(now);
-    weekStart.setDate(now.getDate() - now.getDay() + 1);
-    filtered = logs.filter(l => new Date(l.time) >= weekStart);
-  } else if (text.includes("這個月")) {
-    const month = now.getMonth();
-    const year = now.getFullYear();
-    filtered = logs.filter(l => {
-      const d = new Date(l.time);
-      return d.getMonth() === month && d.getFullYear() === year;
-    });
-  } else {
-    return "請指定「一天」、「這週」或「這個月」的總結。";
-  }
-
-  if (filtered.length === 0) return "這段時間沒有紀錄喔！";
-
-  let result = "📊 總結：\n";
-  for (const l of filtered) {
-    result += `• ${l.time}｜${l.summary}｜${l.category}\n`;
-  }
-
-  return result;
-}
-
-// ---- LINE Reply ----
-async function lineReply(replyToken, text) {
-  const url = 'https://api.line.me/v2/bot/message/reply';
-  const body = JSON.stringify({
-    replyToken,
-    messages: [{ type: 'text', text }]
-  });
-  const headers = {
-    'Authorization': `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
-    'Content-Type': 'application/json'
-  };
-
-  console.log('[LINE REPLY] Request', body);
-
-  const resp = await fetch(url, { method: 'POST', headers, body });
-  const respText = await resp.text();
-  console.log('[LINE REPLY] Response', { status: resp.status, text: respText });
-
-  return resp.ok;
-}
-
-// ---- 主處理 ----
+/** 主 Handler */
 export default async function handler(req, res) {
   try {
     if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
@@ -221,9 +131,10 @@ export default async function handler(req, res) {
     for (const event of body.events || []) {
       if (event.type === "message" && event.message?.type === "text") {
         const userText = event.message.text.trim();
+        console.log("[DEBUG] 收到訊息：", userText);
+
         let aiText = "我這邊忙線一下，等等再試。";
 
-        // 🕹️ 路由判斷
         if (isBacklogMessage(userText)) {
           const parsedTime = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
           const category = await classifyStateLog(userText);
@@ -238,12 +149,14 @@ export default async function handler(req, res) {
           aiText = `🕰️ 已記錄：${parsedTime}\n📌 狀態：${userText}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n✨ 小語：${shortPhrase}`;
         } else {
           try {
-            const r = await openai.responses.create({
+            const r = await openai.chat.completions.create({
               model: "gpt-4o-mini",
-              instructions: SYSTEM_MESSAGE || "你是一個用繁體中文回覆的貼心助理。",
-              input: userText,
+              messages: [
+                { role: "system", content: SYSTEM_MESSAGE || "你是一個用繁體中文回覆的貼心助理。" },
+                { role: "user", content: userText },
+              ],
             });
-            aiText = (r.output_text || "").slice(0, 1900);
+            aiText = r.choices[0].message.content.trim();
           } catch (e) {
             console.error("[OpenAI ERROR]", e);
             aiText = `Echo: ${userText}`;
@@ -257,13 +170,6 @@ export default async function handler(req, res) {
     res.status(200).end();
   } catch (e) {
     console.error("[WEBHOOK ERROR]", e);
-    if (!res.headersSent) res.status(500).end();
-  }
-}
-
-    res.status(200).end();
-  } catch (e) {
-    console.error('[WEBHOOK ERROR]', e);
     if (!res.headersSent) res.status(500).end();
   }
 }
