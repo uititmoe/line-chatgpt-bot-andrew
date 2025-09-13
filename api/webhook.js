@@ -5,7 +5,7 @@ import fs from 'fs';
 const { LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, OPENAI_API_KEY, SYSTEM_MESSAGE } = process.env;
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// 驗證 LINE 簽章
+/* ---------------- 驗證 LINE 簽章 ---------------- */
 function verifyLineSignature(rawBody, signature) {
   if (!LINE_CHANNEL_SECRET || !signature) return false;
   const hmac = createHmac('sha256', LINE_CHANNEL_SECRET)
@@ -14,55 +14,7 @@ function verifyLineSignature(rawBody, signature) {
   return hmac === signature;
 }
 
-// --- 輔助判斷 ---
-function isBacklogMessage(text) {
-  return text.startsWith("補記");
-}
-
-function isLogMessage(text) {
-  if (
-    text.endsWith("嗎？") || text.endsWith("嗎?") || text.endsWith("?") ||
-    text.startsWith("幫我")
-  ) {
-    return false;
-  }
-  return true;
-}
-
-function isSummaryRequest(text) {
-  return text.includes("總結");
-}
-
-// --- 時間解析 ---
-function parseDateTime(text) {
-  const now = new Date();
-  const tzOffset = 8 * 60;
-  const taiwanNow = new Date(now.getTime() + (tzOffset - now.getTimezoneOffset()) * 60000);
-  let target = new Date(taiwanNow);
-
-  if (text.includes("前天")) target.setDate(target.getDate() - 2);
-  else if (text.includes("昨天")) target.setDate(target.getDate() - 1);
-  else if (text.includes("明天")) target.setDate(target.getDate() + 1);
-
-  const mdMatch = text.match(/(\d{1,2})[\/\-](\d{1,2})/);
-  if (mdMatch) {
-    const month = parseInt(mdMatch[1], 10);
-    const day = parseInt(mdMatch[2], 10);
-    target.setMonth(month - 1);
-    target.setDate(day);
-  }
-
-  const hmMatch = text.match(/(\d{1,2})(?:點|:)(\d{1,2})?/);
-  if (hmMatch) {
-    const hour = parseInt(hmMatch[1], 10);
-    const minute = hmMatch[2] ? parseInt(hmMatch[2], 10) : 0;
-    target.setHours(hour, minute, 0, 0);
-  }
-
-  return target.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
-}
-
-// --- 儲存 / 讀取紀錄 ---
+/* ---------------- 紀錄存取 ---------------- */
 function saveLog(entry) {
   let logs = [];
   if (fs.existsSync("logs.json")) {
@@ -79,8 +31,59 @@ function loadLogs() {
   return [];
 }
 
+function deleteLastLog() {
+  if (!fs.existsSync("logs.json")) return null;
+  const logs = JSON.parse(fs.readFileSync("logs.json", "utf8"));
+  if (logs.length === 0) return null;
+  const removed = logs.pop();
+  fs.writeFileSync("logs.json", JSON.stringify(logs, null, 2));
+  return removed;
+}
+
+/* ---------------- 時間解析 ---------------- */
+function parseDateTime(text) {
+  const now = new Date();
+  const tzOffset = 8 * 60;
+  const taiwanNow = new Date(now.getTime() + (tzOffset - now.getTimezoneOffset()) * 60000);
+  let target = new Date(taiwanNow);
+
+  if (text.includes("前天")) target.setDate(target.getDate() - 2);
+  else if (text.includes("昨天")) target.setDate(target.getDate() - 1);
+  else if (text.includes("明天")) target.setDate(target.getDate() + 1);
+
+  const mdMatch = text.match(/(\d{1,2})[\/\-](\d{1,2})/);
+  if (mdMatch) {
+    target.setMonth(parseInt(mdMatch[1], 10) - 1);
+    target.setDate(parseInt(mdMatch[2], 10));
+  }
+
+  const hmMatch = text.match(/(\d{1,2})(?:點|:)(\d{1,2})?/);
+  if (hmMatch) {
+    target.setHours(parseInt(hmMatch[1], 10), hmMatch[2] ? parseInt(hmMatch[2], 10) : 0, 0, 0);
+  }
+
+  return target.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+}
+
+/* ---------------- 判斷邏輯 ---------------- */
+function isBacklogMessage(text) {
+  return text.startsWith("補記");
+}
+function isSummaryRequest(text) {
+  return text.includes("總結");
+}
+function looksLikeQuery(text) {
+  return (
+    text.endsWith("嗎？") || text.endsWith("嗎?") || text.endsWith("?") ||
+    text.startsWith("幫我") || text.startsWith("告訴我") ||
+    text.startsWith("查") || text.startsWith("給我") || text.startsWith("請")
+  );
+}
+
+
 // --- 分類器（主模組 + 輔助分類 + GPT fallback）---
 async function classifyStateLog(text) {
+  // TODO: 在這裡放完整關鍵字分類邏輯
   const gallery_keywords = ["藝廊","畫廊","展覽","佈展","撤展","展場","策展","展覽籌備","展覽安排","現場值班","顧展","顧店",
     "收店","整理展場","整理藝廊","展品","寄賣","報表","帳務","合約","合作","藝術家","對帳","查帳","結帳","會議","開會","陸角銀"];
   const podcast_keywords = ["Podcast","錄音","音檔","剪輯","混音","直播","預告","EP","音訊處理"];
@@ -121,57 +124,109 @@ async function classifyStateLog(text) {
     return { main: mainModules, tags: tags };
   }
 
-  // GPT fallback
-  try {
-    const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        {
-          role: "system",
-          content:
-            "請將輸入的內容分類到以下其中一個最合適的分類，不要加解釋，只回分類標籤。\n" +
-            "主模組：A. 藝廊工作, B. Podcast, C. 商業漫畫, D. 同人＆委託, E. 空間管理\n" +
-            "輔助分類：📑 行政雜務, 💰 財務／記帳, 📢 宣傳／SNS, 🍽️ 飲食, 🛒 生活採購, 🧘 休息／日常, 💼 社交活動, 💡 構思／規劃, 🎯 興趣／休閒活動, 📝 紀錄／其他"
-        },
-        { role: "user", content: text }
-      ],
-      max_tokens: 30
-    });
-    return { main: [], tags: [r.choices[0].message.content.trim()] };
-  } catch (e) {
-    console.error("[GPT 分類錯誤]", e);
+// GPT fallback (混合版)
+try {
+  // Step 1: 判斷是紀錄 or 對話
+  const judge = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: "請判斷以下輸入屬於『紀錄』還是『對話』，只回一個詞。" },
+      { role: "user", content: text }
+    ],
+    max_tokens: 5
+  });
+
+  const decision = judge.choices[0].message.content.trim();
+
+  // Step 2: 如果是對話 → 不存紀錄
+  if (decision === "對話") {
     return { main: [], tags: ["📝 紀錄／其他"] };
   }
+
+  // Step 3: 如果是紀錄 → 請 GPT 幫忙補分類
+  const classify = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content:
+          "請將輸入的內容分類到以下其中一個最合適的分類，不要加解釋，只回分類標籤。\n" +
+          "主模組：A. 藝廊工作, B. Podcast, C. 商業漫畫, D. 同人＆委託, E. 空間管理\n" +
+          "輔助分類：📑 行政雜務, 💰 財務／記帳, 📢 宣傳／SNS, 🍽️ 飲食, 🛒 生活採購, 🧘 休息／日常, 💼 社交活動, 💡 構思／規劃, 🎯 興趣／休閒活動, 📝 紀錄／其他"
+      },
+      { role: "user", content: text }
+    ],
+    max_tokens: 30
+  });
+
+  return { main: [], tags: [classify.choices[0].message.content.trim()] };
+
+} catch (e) {
+  console.error("[GPT 混合分類錯誤]", e);
+  return { main: [], tags: ["📝 紀錄／其他"] };
 }
 
-// --- 短語生成 ---
+/* ---------------- 短語生成 ---------------- */
 async function generateShortPhrase(text) {
   try {
     const r = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: SYSTEM_MESSAGE || "你是一個熟悉 Jean 狀態的助理" },
-        {
-          role: "user",
-          content: `請根據「我現在的狀態是：${text}」，產生一句不超過30字的自然短語。語氣自然，像熟人聊天，避免浮誇或網路流行語，要有摘要感。`
-        }
+        { role: "user", content: `請根據「我現在的狀態是：${text}」，產生一句不超過30字的自然短語。` }
       ],
       max_tokens: 50
     });
     return r.choices[0].message.content.trim();
-  } catch (e) {
-    console.error("[短語生成錯誤]", e);
+  } catch {
     return "（狀態已記錄）";
   }
 }
 
-// --- 總結 ---
+/* ---------------- 區段計算 ---------------- */
+function splitCrossDay(start, end, state) {
+  const segments = [];
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+
+  if (startDate.toDateString() === endDate.toDateString()) {
+    segments.push({ start, end, state });
+  } else {
+    const dayEnd = new Date(startDate);
+    dayEnd.setHours(23, 59, 59, 999);
+    segments.push({ start, end: dayEnd.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }), state });
+
+    const nextDayStart = new Date(dayEnd.getTime() + 1000);
+    segments.push({ start: nextDayStart.toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' }), end, state });
+  }
+  return segments;
+}
+
+function buildSummary(logs) {
+  const result = [];
+  const filtered = logs.filter(l => l.type === "紀錄" || l.type === "補記");
+
+  for (let i = 0; i < filtered.length - 1; i++) {
+    const cur = filtered[i];
+    const next = filtered[i + 1];
+    const curTime = new Date(cur.time);
+    const nextTime = new Date(next.time);
+
+    const segments = splitCrossDay(curTime, nextTime, cur.summary);
+    segments.forEach(seg => result.push(seg));
+  }
+
+  return result.map(r =>
+    `${r.start}–${r.end}｜${r.state}`
+  ).join("\n");
+}
+
 function handleSummary(text) {
   const logs = loadLogs();
   if (logs.length === 0) return "目前沒有任何紀錄可供總結。";
 
-  const now = new Date();
   let filtered = [];
+  const now = new Date();
 
   if (text.includes("一天")) {
     const today = now.toLocaleDateString('zh-TW', { timeZone: 'Asia/Taipei' });
@@ -193,36 +248,43 @@ function handleSummary(text) {
 
   if (filtered.length === 0) return "這段時間沒有紀錄喔！";
 
-  let result = "📊 總結：\n";
-  for (const l of filtered) {
-    result += `• ${l.time}｜${l.summary}｜${[...(l.category.main||[]), ...(l.category.tags||[])].join(" + ")}\n`;
-  }
-
-  return result;
+  return "📊 總結：\n" + buildSummary(filtered);
 }
 
-// --- LINE Reply ---
+/* ---------------- 路由判斷 ---------------- */
+async function smartMessageRoute(userText) {
+  if (isBacklogMessage(userText)) return "補記";
+  if (isSummaryRequest(userText)) return "總結";
+  if (looksLikeQuery(userText)) return "對話";
+
+  const category = await classifyStateLog(userText);
+  if (category.main.length > 0 || category.tags.length > 0) {
+    return "紀錄";
+  }
+
+  const r = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: "請判斷輸入是『紀錄』還是『對話』，只回一個詞。" },
+      { role: "user", content: userText }
+    ],
+    max_tokens: 5
+  });
+  return r.choices[0].message.content.includes("紀錄") ? "紀錄" : "對話";
+}
+
+/* ---------------- LINE Reply ---------------- */
 async function lineReply(replyToken, text) {
   const url = 'https://api.line.me/v2/bot/message/reply';
-  const body = JSON.stringify({
-    replyToken,
-    messages: [{ type: 'text', text }]
-  });
+  const body = JSON.stringify({ replyToken, messages: [{ type: 'text', text }] });
   const headers = {
     'Authorization': `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
     'Content-Type': 'application/json'
   };
-
-  console.log('[LINE REPLY] Request', body);
-
-  const resp = await fetch(url, { method: 'POST', headers, body });
-  const respText = await resp.text();
-  console.log('[LINE REPLY] Response', { status: resp.status, text: respText });
-
-  return resp.ok;
+  await fetch(url, { method: 'POST', headers, body });
 }
 
-// --- 主處理 ---
+/* ---------------- 主處理 ---------------- */
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
@@ -236,54 +298,49 @@ export default async function handler(req, res) {
     const rawBody = Buffer.concat(chunks);
     const signature = req.headers['x-line-signature'];
 
-    if (!verifyLineSignature(rawBody, signature)) {
-      console.warn('[SIGNATURE] 驗證失敗');
-      return res.status(403).send('Invalid signature');
-    }
+    if (!verifyLineSignature(rawBody, signature)) return res.status(403).send('Invalid signature');
 
     const body = JSON.parse(rawBody.toString('utf8'));
-    console.log('[INCOMING BODY]', JSON.stringify(body));
 
     for (const event of body.events || []) {
       if (event.type === 'message' && event.message?.type === 'text') {
         const userText = event.message.text.trim();
         let aiText;
 
-        if (isBacklogMessage(userText)) {
+        // --- 撤銷 ---
+        if (userText === "刪掉上一筆" || userText === "撤銷") {
+          const removed = deleteLastLog();
+          aiText = removed ? `🗑️ 已刪除上一筆：${removed.time}｜${removed.summary}` : "⚠️ 沒有紀錄可刪除。";
+          await lineReply(event.replyToken, aiText);
+          continue;
+        }
+
+        // --- 判斷路由 ---
+        const action = await smartMessageRoute(userText);
+
+        if (action === "補記") {
           const content = userText.replace(/^補記[:：]?\s*/, "");
           const category = await classifyStateLog(content);
           const summary = content.slice(0, 15);
           const parsedTime = parseDateTime(content);
           const shortPhrase = await generateShortPhrase(content);
 
-          aiText =
-            `📝 補記：${parsedTime}\n` +
-            `📌 狀態：${summary}\n` +
-            `📂 主模組：${category.main.join(" + ") || "無"}\n` +
-            `🏷️ 輔助：${category.tags.join(" + ") || "無"}\n` +
-            `✨ 小語：${shortPhrase}`;
-
+          aiText = `📝 補記：${parsedTime}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ")||"無"}\n🏷️ 輔助：${category.tags.join(" + ")||"無"}\n\n${shortPhrase}`;
           saveLog({ type: "補記", time: parsedTime, summary, category, text: content });
-
-        } else if (isSummaryRequest(userText)) {
+        }
+        else if (action === "總結") {
           aiText = handleSummary(userText);
-
-        } else if (isLogMessage(userText)) {
+        }
+        else if (action === "紀錄") {
           const category = await classifyStateLog(userText);
           const summary = userText.slice(0, 15);
           const parsedTime = parseDateTime(userText);
           const shortPhrase = await generateShortPhrase(userText);
 
-          aiText =
-            `🕰️ 已記錄：${parsedTime}\n` +
-            `📌 狀態：${summary}\n` +
-            `📂 主模組：${category.main.join(" + ") || "無"}\n` +
-            `🏷️ 輔助：${category.tags.join(" + ") || "無"}\n` +
-            `\n${shortPhrase}`;
-
+          aiText = `🕰️ 已記錄：${parsedTime}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ")||"無"}\n🏷️ 輔助：${category.tags.join(" + ")||"無"}\n\n${shortPhrase}`;
           saveLog({ type: "紀錄", time: parsedTime, summary, category, text: userText });
-
-        } else {
+        }
+        else { // 對話
           try {
             const r = await openai.responses.create({
               model: 'gpt-4o-mini',
@@ -291,8 +348,7 @@ export default async function handler(req, res) {
               input: userText
             });
             aiText = (r.output_text || '').slice(0, 1900);
-          } catch (e) {
-            console.error('[OpenAI ERROR]', e);
+          } catch {
             aiText = '我這邊忙線一下，等等再試。';
           }
         }
@@ -302,8 +358,7 @@ export default async function handler(req, res) {
     }
 
     res.status(200).end();
-  } catch (e) {
-    console.error('[WEBHOOK ERROR]', e);
+  } catch {
     if (!res.headersSent) res.status(500).end();
   }
 }
