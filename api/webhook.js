@@ -1,6 +1,8 @@
 import { createHmac } from 'node:crypto';
+import OpenAI from 'openai';
 
-const { LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN } = process.env;
+const { LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN, OPENAI_API_KEY } = process.env;
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // 驗證 LINE 簽章
 function verifyLineSignature(rawBody, signature) {
@@ -46,7 +48,6 @@ export default async function handler(req, res) {
     const rawBody = Buffer.concat(chunks);
     const signature = req.headers['x-line-signature'];
 
-    // 驗簽
     if (!verifyLineSignature(rawBody, signature)) {
       console.warn('[SIGNATURE] 驗證失敗');
       return res.status(403).send('Invalid signature');
@@ -59,11 +60,24 @@ export default async function handler(req, res) {
     for (const event of body.events || []) {
       if (event.type === 'message' && event.message?.type === 'text') {
         const userText = event.message.text.trim();
-        await lineReply(event.replyToken, `測試 OK：收到「${userText}」`);
+        let aiText = '我這邊忙線一下，等等再試。';
+
+        try {
+          const r = await openai.responses.create({
+            model: 'gpt-4o-mini',
+            instructions: '你是一個用繁體中文回覆的貼心助理。',
+            input: userText
+          });
+          aiText = (r.output_text || '').slice(0, 1900); // LINE 單則訊息限制
+        } catch (e) {
+          console.error('[OpenAI ERROR]', e);
+        }
+
+        await lineReply(event.replyToken, aiText);
       }
     }
 
-    // 確定都處理完，再回 LINE 平台
+    // 確定處理完才回 200
     res.status(200).end();
   } catch (e) {
     console.error('[WEBHOOK ERROR]', e);
