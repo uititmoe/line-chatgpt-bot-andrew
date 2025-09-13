@@ -72,13 +72,17 @@ async function summarizeEvent(text) {
           role: "system",
           content: `你是日誌摘要助理。
 請將輸入文字壓縮成一行簡短的事件描述（20字內），避免口語化和贅字。
-只輸出簡潔描述，不要加評論。句末不需加句點。`,
+只輸出簡潔描述，不要加評論。`,
         },
         { role: "user", content: text },
       ],
       temperature: 0.3,
     });
     return r.choices[0].message.content.trim();
+
+        // 🔧 後處理：移除最後的句號（中/英文/全形/半形）
+    result = result.replace(/[。.!！?？]$/, "");
+    
   } catch (e) {
     console.error("[GPT 摘要錯誤]", e);
     return text;
@@ -161,7 +165,8 @@ export default async function handler(req, res) {
 📌 狀態：${summary}
 📂 主模組：${category.main.join(" + ") || "無"}
 🏷️ 輔助：${category.tags.join(" + ") || "無"}
-/n ${shortPhrase}`;
+
+${shortPhrase}`;
 
         } else if (isSummaryRequest(userText)) {
           aiText = "📊 總結功能（可加上統計，但此處略）";
@@ -176,7 +181,8 @@ export default async function handler(req, res) {
 📌 狀態：${summary}
 📂 主模組：${category.main.join(" + ") || "無"}
 🏷️ 輔助：${category.tags.join(" + ") || "無"}
-/n ${shortPhrase}`;
+
+${shortPhrase}`;
 
         } else {
           try {
