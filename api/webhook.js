@@ -56,26 +56,29 @@ export default async function handler(req, res) {
     const body = JSON.parse(rawBody.toString('utf8'));
     console.log('[INCOMING BODY]', JSON.stringify(body));
 
-    // 處理事件
-    for (const event of body.events || []) {
-      if (event.type === 'message' && event.message?.type === 'text') {
-        const userText = event.message.text.trim();
-        let aiText = '我這邊忙線一下，等等再試。';
+// 讀取環境變數
+const SYSTEM_MESSAGE = process.env.SYSTEM_MESSAGE;
 
-        try {
-          const r = await openai.responses.create({
-            model: 'gpt-4o-mini',
-            instructions: '你是一個用繁體中文回覆的貼心助理。',
-            input: userText
-          });
-          aiText = (r.output_text || '').slice(0, 1900); // LINE 單則訊息限制
-        } catch (e) {
-          console.error('[OpenAI ERROR]', e);
-        }
+// 處理事件
+for (const event of body.events || []) {
+  if (event.type === 'message' && event.message?.type === 'text') {
+    const userText = event.message.text.trim();
+    let aiText = '我這邊忙線一下，等等再試。';
 
-        await lineReply(event.replyToken, aiText);
-      }
+    try {
+      const r = await openai.responses.create({
+        model: 'gpt-4o-mini',
+        instructions: SYSTEM_MESSAGE || '你是一個用繁體中文回覆的貼心助理。',
+        input: userText
+      });
+      aiText = (r.output_text || '').slice(0, 1900); // LINE 單則訊息限制
+    } catch (e) {
+      console.error('[OpenAI ERROR]', e);
     }
+
+    await lineReply(event.replyToken, aiText);
+  }
+}
 
     // 確定處理完才回 200
     res.status(200).end();
