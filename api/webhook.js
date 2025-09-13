@@ -105,6 +105,17 @@ async function generateShortPhrase(text) {
   }
 }
 
+function isUndoRequest(text) {
+  return text.includes("撤銷") || text.includes("刪除上一筆");
+}
+
+function isCorrectionRequest(text) {
+  return text.startsWith("更正") || text.startsWith("修改");
+}
+
+// 測試用暫存
+const logs = [];
+
 /** 主 Handler */
 export default async function handler(req, res) {
   try {
@@ -135,6 +146,26 @@ export default async function handler(req, res) {
 
         let aiText = "我這邊忙線一下，等等再試。";
 
+        if (isUndoRequest(userText)) {
+          // 撤銷最後一筆
+          if (logs.length > 0) {
+            logs.pop();
+            aiText = "✅ 已撤銷上一筆紀錄";
+          } else {
+            aiText = "⚠️ 沒有可以撤銷的紀錄";
+          }
+
+        } else if (isCorrectionRequest(userText)) {
+          // 更正最後一筆
+          const correction = userText.replace(/^更正[:：]?\s*/, "");
+          if (logs.length > 0) {
+            logs[logs.length - 1].summary = correction.slice(0, 15);
+            logs[logs.length - 1].text = correction;
+            aiText = `✏️ 已更正最後一筆：${correction}`;
+          } else {
+            aiText = "⚠️ 沒有可以更正的紀錄";
+          }
+        
         if (isBacklogMessage(userText)) {
           const parsedTime = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
           const category = await classifyStateLog(userText);
