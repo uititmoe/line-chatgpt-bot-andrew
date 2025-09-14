@@ -115,19 +115,30 @@ async function summarizeEvent(text) {
   }
 }
 
-/** 小語（30 字內自然短語） */
-async function generateShortPhrase(text) {
+/** 小語（SYSTEM_MESSAGE + 規則混合版） */
+async function generateShortPhrase(text, isBacklog = false) {
   try {
     const r = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [
-        { role: "system", content: SYSTEM_MESSAGE || "你是一個熟悉 Jean 狀態的助理" },
         {
-          role: "user",
-          content: `請根據「我現在的狀態是：${text}」，產生一句不超過30字的自然短語。語氣自然，像熟人聊天，可以略帶輕鬆幽默，但避免浮誇或網路流行語，可以有簡單的鼓勵或總結，或是依據訊息的心情和行動回應、補充小提醒或冷知識。`,
+          role: "system",
+          content: `${SYSTEM_MESSAGE || "你是一個熟悉 Jean 狀態的助理"}
+          
+          任務指令：
+          請根據輸入內容，生成一句不超過 30 字的短語。
+          
+          規則：
+          - 如果是「即時紀錄」，請用現在進行式，像陪伴聊天。
+          - 如果是「補記」，請用已完成或回顧語氣，避免「正在、準備」。
+          - 語氣自然，像熟人聊天，可以略帶輕鬆幽默。
+          - 避免浮誇、網路流行語。
+          - 可以有簡單的鼓勵或總結，或是給予小提醒或和輸入內容有關的小知識。
         },
+        { role: "user", content: text },
       ],
       max_tokens: 50,
+      temperature: 0.7,
     });
     return r.choices[0].message.content.trim();
   } catch (e) {
@@ -187,7 +198,7 @@ export default async function handler(req, res) {
           const parsedTime = parseDateTime(content);
           const category = await classifyStateLog(content);
           const summary = await summarizeEvent(content);
-          const shortPhrase = await generateShortPhrase(content);
+          const shortPhrase = await generateShortPhrase(content, true);
 
           aiText = `📝 補記：${parsedTime}
 📌 狀態：${summary}
@@ -201,7 +212,7 @@ ${shortPhrase}`;
           const parsedTime = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
           const category = await classifyStateLog(userText);
           const summary = await summarizeEvent(userText);
-          const shortPhrase = await generateShortPhrase(userText);
+          const shortPhrase = await generateShortPhrase(userText, false);
 
           aiText = `🕰️ 已記錄：${parsedTime}
 📌 狀態：${summary}
