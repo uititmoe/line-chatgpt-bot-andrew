@@ -101,13 +101,17 @@ async function summarizeEvent(text) {
       ],
       temperature: 0.3,
     });
-let result = r.choices[0].message.content.trim();
 
-// 🔧 後處理：移除最後的句號（中/英文/全形/半形）
-result = result.replace(/\s+$/g, "");          
-result = result.replace(/[。.!！?？]$/, "");   
+    let result = r.choices[0].message.content.trim();
 
-return result;
+    // 🔧 後處理：移除最後的句號（中/英文/全形/半形）
+    result = result.replace(/\s+$/g, "");
+    result = result.replace(/[。.!！?？]$/, "");
+
+    return result;
+  } catch (e) {
+    console.error("[GPT 摘要錯誤]", e);
+    return text;  // 出錯時至少回原文，不會卡住
   }
 }
 
