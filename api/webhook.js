@@ -272,9 +272,14 @@ async function generateShortPhrase(text, isBacklog = false) {
 - 語氣自然，像熟人，輕鬆幽默即可。
 - 可以給予簡單的鼓勵或依表達的心情回應，也可針對內容進行小提醒或知識補充。
 - 避免浮誇、網路流行語，不要加句號。`,
+        },
+        {
+          role: "user",
+          content: isBacklog
+            ? `這是一則補記：${text}`
+            : `這是一則即時紀錄：${text}`
         }
-      ],
-      max_tokens: 50
+      ]
     });
     return r.choices[0].message.content.trim();
   } catch (e) {
