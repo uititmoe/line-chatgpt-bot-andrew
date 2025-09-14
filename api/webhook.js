@@ -59,6 +59,10 @@ function isUndoRequest(text) {
   return text.includes("撤銷") || text.includes("刪除上一則");
 }
 function isLogCandidate(text) {
+  // 非記錄語氣（明顯是對話）
+  if (text.includes("你")) return false;
+  if (text.startsWith("我覺得")) return false;
+  
   // 問句排除
   if (/[嗎\?？]$/.test(text)) return false;
   if (isBacklogMessage(text) || isSummaryRequest(text) || isUndoRequest(text))
