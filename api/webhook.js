@@ -18,6 +18,9 @@ function isBacklogMessage(text) {
 function isSummaryRequest(text) {
   return text.includes("總結");
 }
+function isUndoRequest(text) {
+  return text.includes("撤銷") || text.includes("刪除上一則");
+}
 function isLogCandidate(text) {
   if (/[嗎\?？]$/.test(text)) return false;
   if (text.startsWith("補記") || text.includes("總結")) return false;
@@ -57,6 +60,31 @@ function parseDateTime(text) {
   const base = target.toLocaleString("zh-TW", { timeZone: "UTC" });
   return hasApprox ? `約 ${base}` : base;
 }
+
+/** 日期篩選工具 */
+function getDateRange(type) {
+  const now = new Date();
+  let start, end;
+
+  if (type === "today") {
+    start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    end = new Date(start);
+    end.setDate(end.getDate() + 1);
+  } else if (type === "week") {
+    const day = now.getDay() || 7; // 星期天處理為 7
+    start = new Date(now);
+    start.setDate(now.getDate() - day + 1); // 本週一
+    start.setHours(0, 0, 0, 0);
+    end = new Date(start);
+    end.setDate(end.getDate() + 7);
+  } else if (type === "month") {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  }
+
+  return { start, end };
+}
+
 
 /** 分類（主模組＋輔助），沒命中 → fallback */
 async function classifyStateLog(text) {
@@ -194,37 +222,115 @@ export default async function handler(req, res) {
 
         /** -------- 補記 -------- */
         if (isBacklogMessage(userText)) {
-          const content = userText.replace(/^補記[:：]?\s*/, "");
-          const parsedTime = parseDateTime(content);
-          const category = await classifyStateLog(content);
-          const summary = await summarizeEvent(content);
-          const shortPhrase = await generateShortPhrase(content, true);
-
-          aiText = `📝 補記：${parsedTime}
-📌 狀態：${summary}
-📂 主模組：${category.main.join(" + ") || "無"}
-🏷️ 輔助：${category.tags.join(" + ") || "無"}
-
-${shortPhrase}`;
-        }
-        /** -------- 即時紀錄 -------- */
-        else if (isLogCandidate(userText)) {
           const parsedTime = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" });
           const category = await classifyStateLog(userText);
+          const summary = await summarizeEvent(userText); // 🔧 新增
+          const shortPhrase = await generateShortPhrase(userText);
+
+          aiText = `📝 補記：${parsedTime}
+        📌 狀態：${summary}
+        📂 主模組：${category.main.join(" + ") || "無"}
+        🏷️ 輔助：${category.tags.join(" + ") || "無"}
+
+        ${shortPhrase}`;
+        }
+        
+        /** -------- 即時紀錄 -------- */
+        else if (isLogCandidate(userText)) {
+          const category = await classifyStateLog(userText);
           const summary = await summarizeEvent(userText);
-          const shortPhrase = await generateShortPhrase(userText, false);
-
+          const parsedTime = new Date().toLocaleString("zh-TW", { timeZone: "Asia/Taipei" }); // 🔧 改成直接用現在時間
+         const shortPhrase = await generateShortPhrase(userText);
+  
           aiText = `🕰️ 已記錄：${parsedTime}
-📌 狀態：${summary}
-📂 主模組：${category.main.join(" + ") || "無"}
-🏷️ 輔助：${category.tags.join(" + ") || "無"}
+        📌 狀態：${summary}
+        📂 主模組：${category.main.join(" + ") || "無"}
+        🏷️ 輔助：${category.tags.join(" + ") || "無"}
 
-${shortPhrase}`;
+        ${shortPhrase}`;
         }
-        /** -------- 總結 -------- */
+        
+        /** 撤銷 */        
+        else if (isUndoRequest(userText)) {
+          if (logs.length > 0) {
+            const removed = logs.pop();
+            aiText = `↩️ 已撤銷上一筆紀錄：${removed.summary || "(無摘要)"}`;
+          } else {
+            aiText = "⚠️ 沒有可撤銷的紀錄";
+          }
+        }
+
+        /** 總結處理 */
         else if (isSummaryRequest(userText)) {
-          aiText = "📊 總結功能尚在開發中";
+          let rangeType = "today"; // 預設今天
+          if (userText.includes("週")) rangeType = "week";
+          if (userText.includes("月")) rangeType = "month";
+
+          const { start, end } = getDateRange(rangeType);
+
+          // 過濾符合範圍的紀錄
+          const rangeLogs = logs.filter((log) => {
+            if (log.start && log.end) {
+              return new Date(log.start) >= start && new Date(log.start) < end;
+            } else if (log.time) {
+              return new Date(log.time) >= start && new Date(log.time) < end;
+            }
+            return false;
+          });
+
+          // 區間結果
+          const intervals = [];
+
+          // 1. 補記完整區間
+          for (const log of rangeLogs) {
+            if (log.start && log.end) {
+              intervals.push({
+                start: log.start,
+                end: log.end,
+                summary: log.summary,
+              });
+            }
+          }
+
+          // 2. 補記單點（開始/結束）
+          const pendingStarts = {};
+          for (const log of rangeLogs) {
+            if (log.marker === "start") {
+              pendingStarts[log.summary] = log.time;
+            } else if (log.marker === "end" && pendingStarts[log.summary]) {
+              intervals.push({
+                start: pendingStarts[log.summary],
+                end: log.time,
+                summary: log.summary,
+              });
+              delete pendingStarts[log.summary];
+            }
+          }
+
+          // 3. 即時紀錄（點 → 區間）
+          const instantLogs = rangeLogs
+            .filter((log) => log.time && !log.marker)
+            .sort((a, b) => new Date(a.time) - new Date(b.time));
+
+          for (let i = 0; i < instantLogs.length - 1; i++) {
+            intervals.push({
+              start: instantLogs[i].time,
+              end: instantLogs[i + 1].time,
+              summary: instantLogs[i].summary,
+            });
+          }
+
+          // 生成回覆文字
+          if (intervals.length === 0) {
+            aiText = `📊 這${rangeType === "today" ? "天" : rangeType === "week" ? "週" : "月"}還沒有紀錄喔～`;
+          } else {
+            let list = intervals.map((iv, i) => {
+              return `${i + 1}. ${iv.start}–${iv.end}｜${iv.summary}`;
+            });
+            aiText = `📊 ${rangeType === "today" ? "今日" : rangeType === "week" ? "本週" : "本月"}總結\n\n${list.join("\n")}`;
+          }
         }
+        
         /** -------- 一般對話 -------- */
         else {
           try {
