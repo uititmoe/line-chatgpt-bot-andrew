@@ -124,7 +124,7 @@ async function generateShortPhrase(text) {
         { role: "system", content: SYSTEM_MESSAGE || "你是一個熟悉 Jean 狀態的助理" },
         {
           role: "user",
-          content: `請根據「我現在的狀態是：${text}」，產生一句不超過30字的自然短語。語氣自然，像熟人聊天，避免浮誇或網路流行語，要有摘要感。`,
+          content: `請根據「我現在的狀態是：${text}」，產生一句不超過30字的自然短語。語氣自然，像熟人聊天，可以略帶輕鬆幽默，但避免浮誇或網路流行語，可以有簡單的鼓勵或總結，或是依據訊息的心情和行動回應、補充小提醒或冷知識。`,
         },
       ],
       max_tokens: 50,
