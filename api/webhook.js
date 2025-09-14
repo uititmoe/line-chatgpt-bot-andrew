@@ -200,7 +200,7 @@ async function classifyStateLog(text) {
           role: "system",
           content: `你是日誌分類助理。
 請把輸入訊息分成：
-1. 主模組（五選一：A. 藝廊工作, B. Podcast, C. 商業漫畫, D. 同人與委託, E. 生活日常）
+1. 主模組（五選一：A. 藝廊工作, B. Podcast, C. 商業漫畫, D. 同人與委託, E. 辦公室維運, F. 生活日常）
 2. 輔助分類（可多選：創作／交通／行政／財務／SNS／飲食／健康／社交／休息／其他）
 只回 JSON，例如：
 {"main":["C. 商業漫畫"], "tags":["📢 SNS／宣傳","🧾 行政"]}`,
@@ -212,7 +212,7 @@ async function classifyStateLog(text) {
     return JSON.parse(r.choices[0].message.content.trim());
   } catch (e) {
     console.error("[GPT 分類錯誤]", e);
-    return { main: ["E. 生活日常"], tags: ["📝 其他"] };
+    return { main: ["F. 生活日常"], tags: ["📝 其他"] };
   }
 }
 
@@ -260,11 +260,11 @@ async function generateShortPhrase(text, isBacklog = false) {
 - 語氣自然，像熟人，輕鬆幽默即可。
 - 可以給予簡單的鼓勵或依表達的心情回應，也可針對內容進行小提醒或知識補充。
 - 避免浮誇、網路流行語，不要加句號。`,
-        },
-        { role: "user", content: text },
+        }
       ],
+      max_tokens: 50
     });
-    return short || "（狀態已記錄）";
+    return r.choices[0].message.content.trim();
   } catch (e) {
     console.error("[短語生成錯誤]", e);
     return "（狀態已記錄）";
@@ -405,12 +405,7 @@ export default async function handler(req, res) {
             tags: category.tags,
           });
 
-          aiText = `📝 補記：${t.display}
-          📌 狀態：${summary}
-          📂 主模組：${category.main.join(" + ") || "無"}
-          🏷️ 輔助：${category.tags.join(" + ") || "無"}
-          
-          ${shortPhrase}`;
+          aiText = `📝 補記：${t.display}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
           }
 
         /** 即時紀錄 */
@@ -434,12 +429,7 @@ export default async function handler(req, res) {
             tags: category.tags,
           });
 
-          aiText = `🕰️ 已記錄：${timeDisplay}
-          📌 狀態：${summary}
-          📂 主模組：${category.main.join(" + ") || "無"}
-          🏷️ 輔助：${category.tags.join(" + ") || "無"}
-
-          ${shortPhrase}`;
+          aiText = `🕰️ 已記錄：${timeDisplay}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
           }
 
         /** 一般對話 */
