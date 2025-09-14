@@ -101,15 +101,13 @@ async function summarizeEvent(text) {
       ],
       temperature: 0.3,
     });
-    return r.choices[0].message.content.trim();
+let result = r.choices[0].message.content.trim();
 
-        // 🔧 後處理：移除最後的句號（中/英文/全形/半形）
-    result = result.replace(/\s+$/g, "");              // 先清掉所有結尾空白/換行
-    result = result.replace(/[。.!！?？]$/, "");       // 再移除最後的標點
-    
-  } catch (e) {
-    console.error("[GPT 摘要錯誤]", e);
-    return text;
+// 🔧 後處理：移除最後的句號（中/英文/全形/半形）
+result = result.replace(/\s+$/g, "");          
+result = result.replace(/[。.!！?？]$/, "");   
+
+return result;
   }
 }
 
@@ -191,7 +189,8 @@ export default async function handler(req, res) {
 📌 狀態：${summary}
 📂 主模組：${category.main.join(" + ") || "無"}
 🏷️ 輔助：${category.tags.join(" + ") || "無"}
-✨ 小語：${shortPhrase}`;
+
+${shortPhrase}`;
         }
         /** -------- 即時紀錄 -------- */
         else if (isLogCandidate(userText)) {
@@ -204,7 +203,8 @@ export default async function handler(req, res) {
 📌 狀態：${summary}
 📂 主模組：${category.main.join(" + ") || "無"}
 🏷️ 輔助：${category.tags.join(" + ") || "無"}
-✨ 小語：${shortPhrase}`;
+
+${shortPhrase}`;
         }
         /** -------- 總結 -------- */
         else if (isSummaryRequest(userText)) {
