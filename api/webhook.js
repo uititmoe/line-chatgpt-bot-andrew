@@ -14,6 +14,7 @@ const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
  *  修正重點 1：全域暫存 logs（新）
  *  ----------------------------- */
 let logs = [];
+let chatHistory = []; // 🆕對話延續暫存
 
 /** 驗證 LINE 簽章 */
 function verifyLineSignature(rawBody, signature) {
@@ -453,26 +454,39 @@ export default async function handler(req, res) {
           aiText = `🕰️ 已記錄：${timeDisplay}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
           }
 
-        /** 一般對話 */
-        else {
-          try {
-            const r = await openai.chat.completions.create({
-              model: "gpt-4o",
-              messages: [
-                {
-                  role: "system",
-                  content:
-                    SYSTEM_MESSAGE || "你是 Jean 的 LINE 助理，用繁體中文自然回應。",
-                },
-                { role: "user", content: userText },
-              ],
-            });
-            aiText = (r.choices[0]?.message?.content || "").slice(0, 1900);
-          } catch (e) {
-            console.error("[OpenAI 對話錯誤]", e);
-            aiText = "我這邊忙線一下，等等再試。";
-          }
-        }
+        /** 一般對話（延續模式） */
+       else {
+         try {
+           // 保存使用者訊息
+           chatHistory.push({ role: "user", content: userText });
+
+           // 只取最後 5 則對話
+           const recentHistory = chatHistory.slice(-5);
+
+           const r = await openai.chat.completions.create({
+             model: "gpt-4o",
+             messages: [
+               {
+                 role: "system",
+                 content:
+                   SYSTEM_MESSAGE || "你是 Jean 的 LINE 助理，用繁體中文自然回應。",
+              },
+               ...recentHistory,
+             ],
+           });
+
+           const replyText = (r.choices[0]?.message?.content || "").trim();
+
+           // 保存助理回覆
+           chatHistory.push({ role: "assistant", content: replyText });
+
+           aiText = replyText.slice(0, 1900); // 確保不超過 LINE 限制
+         } catch (e) {
+           console.error("[OpenAI 對話錯誤]", e);
+           aiText = "我這邊忙線一下，等等再試。";
+         }
+       }
+
 
         await lineReply(event.replyToken, aiText);
       }
