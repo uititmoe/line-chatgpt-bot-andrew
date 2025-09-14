@@ -59,10 +59,14 @@ function isUndoRequest(text) {
   return text.includes("撤銷") || text.includes("刪除上一則");
 }
 function isLogCandidate(text) {
-  // 非記錄語氣（明顯是對話）
-  if (text.includes("你")) return false;
-  if (text.startsWith("我覺得")) return false;
-  
+  const nonLogPhrases = [
+    "我覺得", "我希望", "我猜", "我認為", 
+    "可以幫", "能不能", "要不要", "是不是" , "你" 
+  ];
+    // 非記錄語氣 → 一律當對話
+  if (nonLogPhrases.some(p => text.startsWith(p) || text.includes(p))) {
+    return false;
+  }  
   // 問句排除
   if (/[嗎\?？]$/.test(text)) return false;
   if (isBacklogMessage(text) || isSummaryRequest(text) || isUndoRequest(text))
