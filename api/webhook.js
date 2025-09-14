@@ -71,8 +71,7 @@ function isLogCandidate(text) {
 
   // 常見狀態語氣
   if (/^我/.test(text) || text.includes("正在") || text.includes("剛"))
-    return true;
-
+  return true;
   return false;
 }
 
@@ -265,8 +264,6 @@ async function generateShortPhrase(text, isBacklog = false) {
         { role: "user", content: text },
       ],
     });
-
-
     return short || "（狀態已記錄）";
   } catch (e) {
     console.error("[短語生成錯誤]", e);
