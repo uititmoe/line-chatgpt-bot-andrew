@@ -266,8 +266,7 @@ async function generateShortPhrase(text, isBacklog = false) {
       ],
     });
 
-    let short = r.choices[0]?.message?.content?.trim() || "";
-    short = short.replace(/[。！？、,.]$/, "");
+
     return short || "（狀態已記錄）";
   } catch (e) {
     console.error("[短語生成錯誤]", e);
@@ -410,12 +409,12 @@ export default async function handler(req, res) {
           });
 
           aiText = `📝 補記：${t.display}
-        📌 狀態：${summary}
-        📂 主模組：${category.main.join(" + ") || "無"}
-        🏷️ 輔助：${category.tags.join(" + ") || "無"}
-
-        ${shortPhrase}`;
-        }
+          📌 狀態：${summary}
+          📂 主模組：${category.main.join(" + ") || "無"}
+          🏷️ 輔助：${category.tags.join(" + ") || "無"}
+          
+          ${shortPhrase}`;
+          }
 
         /** 即時紀錄 */
         else if (isLogCandidate(userText)) {
@@ -439,12 +438,12 @@ export default async function handler(req, res) {
           });
 
           aiText = `🕰️ 已記錄：${timeDisplay}
-        📌 狀態：${summary}
-        📂 主模組：${category.main.join(" + ") || "無"}
-        🏷️ 輔助：${category.tags.join(" + ") || "無"}
+          📌 狀態：${summary}
+          📂 主模組：${category.main.join(" + ") || "無"}
+          🏷️ 輔助：${category.tags.join(" + ") || "無"}
 
-        ${shortPhrase}`;
-        }
+          ${shortPhrase}`;
+          }
 
         /** 一般對話 */
         else {
