@@ -178,21 +178,21 @@ function parseDateTimeDetailed(text) {
  *  GPT：分類 / 摘要 / 小語
  *  ----------------------------- */
 
-// 簡化的藝廊工作關鍵字（縮窄範圍）
+/** 關鍵字縮窄版：藝廊工作 */
 const galleryKeywords = [
   "藝廊", "展覽", "展場", "佈展", "撤展", "策展", "會計", "收據", "做網站", "架網站", "朝朝", "陸角銀"  
   "顧展", "收展", "展品", "藝術家", "寄賣", "分潤", "對帳"
 ];
 
-// 主分類器
+/** 分類（主模組＋輔助），沒命中 → fallback */
 async function classifyStateLog(text) {
   try {
-    // 先用關鍵字快速判斷
+    // 先用 keyword 判斷（藝廊專屬）
     if (galleryKeywords.some((kw) => text.includes(kw))) {
       return { main: ["A. 藝廊工作"], tags: ["🧾 行政"] };
     }
 
-    // 如果沒有命中 → 交給 GPT 判斷
+    // 沒命中 → 交給 GPT
     const r = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       temperature: 0,
@@ -209,6 +209,7 @@ async function classifyStateLog(text) {
         { role: "user", content: text },
       ],
     });
+
     return JSON.parse(r.choices[0].message.content.trim());
   } catch (e) {
     console.error("[GPT 分類錯誤]", e);
