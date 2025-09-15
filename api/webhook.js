@@ -135,6 +135,12 @@ function parseDateTimeDetailed(text) {
     m = t.getMonth() + 1;
     d = t.getDate();
     hadDate = true;
+  } else if (/今天/.test(text)) {
+    // 今天就是 taiwanNow
+    y = taiwanNow.getFullYear();
+    m = taiwanNow.getMonth() + 1;
+    d = taiwanNow.getDate();
+    hadDate = true;
   } else if (/明天/.test(text)) {
     const t = new Date(taiwanNow);
     t.setDate(t.getDate() + 1);
