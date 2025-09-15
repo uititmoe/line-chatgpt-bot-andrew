@@ -187,6 +187,7 @@ const galleryKeywords = [
 ];
 const officeActions = ["打掃", "清理", "整理", "收納", "維護", "修繕", "補貨", "檢查"];
 
+/** -------- 分類 -------- */
 async function classifyStateLog(text) {
   try {
     // 先用 keyword 判斷（狹義）
@@ -251,12 +252,14 @@ async function generateShortPhrase(text, isBacklog = false) {
   try {
     const r = await openai.chat.completions.create({
       model: "gpt-4o",  // ✅ 用主模型，不要 mini，保證語氣多變
+      max_tokens: 120,
       messages: [
         {
           role: "system",
           content:
             (SYSTEM_MESSAGE || "你是 Jean 的 LINE 助理，用繁體中文自然回應。") +
-            `\n任務指令：
+              `
+任務指令：
 請根據輸入內容生成一句不超過 50 字的短語。
 
 規則：
@@ -265,10 +268,10 @@ async function generateShortPhrase(text, isBacklog = false) {
 - 語氣自然，像熟人，輕鬆幽默即可。
 - 可以有簡單鼓勵、心情回應、提醒或小知識。
 - 避免浮誇、網路流行語。
-- 句尾保持自然標點（句號、驚嘆號、問號均可），偶爾可使用表情符號。
+- 句尾保持自然標點（句號、驚嘆號、問號均可）。
 - 短語長度可在 10–50 字之間變化。
-- 句型保持多樣化，不要每次都以相同字詞（如「開始」「準備」）開頭。
-- 可以偶爾加入隱性的情緒或效果描述（例如「空間清爽多了」「看來會很忙碌」）。`,
+- 句型保持多樣化。
+- 可偶爾加入隱性情緒或效果描述（例如「空間清爽多了」「看來會很忙碌」）。`,
         },
         {
           role: "user",
@@ -349,45 +352,46 @@ export default async function handler(req, res) {
         if (isUndoRequest(userText)) {
           let targetLog = null;
 
-          // 解析「撤銷 <時間字串>」
+          // 嘗試解析「撤銷 <時間字串>」
           const parts = userText.split(" ");
           if (parts.length > 1) {
             const targetTime = parts[1].trim();
-            targetLog = logs.find(
-              (log) =>
-                !log.deleted &&
-                (log.timeISO === targetTime || log.timeDisplay === targetTime)
-            );
+            for (let i = logs.length - 1; i >= 0; i--) {
+              if (
+                logs[i].timeISO === targetTime ||
+                logs[i].timeDisplay === targetTime
+              ) {
+                targetLog = logs[i];
+                targetLog.deleted = true; // 軟刪除
+                break;
+              }
+            }
           }
 
-          // 沒指定 → 找最後一筆未刪除
+          // 如果沒指定時間 → fallback 成撤銷最後一筆
           if (!targetLog && logs.length > 0) {
-            targetLog = [...logs].reverse().find((log) => !log.deleted);
+            targetLog = logs.pop();
           }
 
           if (targetLog) {
-            // 統一軟刪除，避免打亂 logs 順序
-            targetLog.deleted = true;
-
-            // 通知 Google Sheet 刪除
             try {
-              await fetch(process.env.SHEET_WEBHOOK_URL, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  action: "delete",
-                  timeISO: targetLog.timeISO || "",
-                  timeDisplay: targetLog.timeDisplay || "",
-                }),
+              await syncToSheet({
+                action: "delete",
+                timeISO: targetLog.timeISO,
+                timeDisplay: targetLog.timeDisplay,
               });
             } catch (e) {
               console.error("[Google Sheet 撤銷錯誤]", e);
             }
 
-            aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${targetLog.summary || "(無摘要)"}`;
+            aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
+              targetLog.summary || "(無摘要)"
+            }`;
           } else {
             aiText = "⚠️ 沒有可撤銷的紀錄";
           }
+        }
+
           
         // -------- 2) 補記 --------
         else if (isBacklogMessage(userText)) {
@@ -458,21 +462,41 @@ export default async function handler(req, res) {
           let rangeType = "today";
           let customDate = null;
           let mdMatch = null;
+          
+          // 1) 判斷是否有單日日期（mm/dd）
+            const md = userText.match(/(\d{1,2})[\/\-](\d{1,2})/);
+            if (md) {
+            const now = new Date();
+            let y = now.getFullYear();
+            const m = parseInt(md[1], 10);
+            const d = parseInt(md[2], 10);
 
-          if (userText.includes("週")) rangeType = "week";
-          else if (userText.includes("月")) rangeType = "month";
-          else {
-            // 支援 "9/15 總結" 或 "09-15 總結"
-            mdMatch = userText.match(/(\d{1,2})[\/\-](\d{1,2})/);
-            if (mdMatch) {
-              const y = new Date().getFullYear();
-              const m = parseInt(mdMatch[1], 10);
-              const d = parseInt(mdMatch[2], 10);
-              customDate = new Date(y, m - 1, d);
-              rangeType = "custom";
-            }
+          // 總結日期跨年修正
+          const candidate = new Date(y, m - 1, d);
+          if (candidate > now && (candidate - now) / (1000 * 60 * 60 * 24) > 30) {
+            y = y - 1;
           }
-
+          
+            start = new Date(y, m - 1, d, 0, 0, 0);
+            end   = new Date(y, m - 1, d + 1, 0, 0, 0);
+          }
+          
+              // 避免未來日期誤判成今年
+              if (customDate > nowTW) {
+                customDate.setFullYear(customDate.getFullYear() - 1);
+              }
+              start = new Date(customDate.setHours(0, 0, 0, 0));
+              end = new Date(customDate.setHours(23, 59, 59, 999));
+             }
+          }
+          
+            // 2) 否則走原本 today/week/month
+            else {
+              if (userText.includes("週")) rangeType = "week";
+              if (userText.includes("月")) rangeType = "month";
+              ({ start, end } = getDateRange(rangeType));
+            }
+            
           // 取得範圍（以台灣時間）
           let start, end;
           if (rangeType === "custom" && customDate) {
