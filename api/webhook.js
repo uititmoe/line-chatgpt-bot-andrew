@@ -472,7 +472,8 @@ export default async function handler(req, res) {
             const d = parseInt(md[2], 10);
             customDate = new Date(y, m, d);
           }
-
+          
+          // 決定範圍
           let start, end;
           if (customDate) {
             start = new Date(customDate.setHours(0, 0, 0, 0));
@@ -483,31 +484,32 @@ export default async function handler(req, res) {
             end = range.end;
           }
           
-          // 篩選 logs
+          // 篩選 logs（跳過沒有 ISO 的或被撤銷的）
           const rangeLogs = logs.filter((log) => {
             if (log.timeISO) {
               const t = new Date(log.timeISO);
               return t >= start && t <= end;
             }
             return false;
-          });
+          });        
           
-          // 清單
+          // 標題
+          const title =
+            rangeType === "custom" && customDate
+               ? `${customDate.getMonth() + 1}/${customDate.getDate()} 單日總結` 
+               : rangeType === "today"
+               ? "今日總結"
+               : rangeType === "week"
+               ? "本週總結"
+               : "本月總結";
+
           if (rangeLogs.length === 0) {
-            aiText = `📊 ${
-              customDate
-                ? `${md[1]}/${md[2]} 沒有紀錄`
-                : rangeType === "today"
-                ? "今天還沒有紀錄喔～"
-                : rangeType === "week"
-                ? "這週還沒有紀錄喔～"
-                : "這個月還沒有紀錄喔～"
-            }`;
+            aiText = `📊 ${title}\n（沒有紀錄）`;
           } else {
-            const list = rangeLogs.map(
-              (log, i) =>
-                `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
-            );
+            // 清單
+            const list = rangeLogs.map((log, i) =>
+              `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
+          );
             
           // 主模組統計
           const stats = {};
