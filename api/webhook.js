@@ -290,6 +290,5 @@ export default async function handler(req, res) {
   } catch (e) {
     console.error("[WEBHOOK ERROR]", e);
     if (!res.headersSent) res.status(500).end();
-    
   }
 }
