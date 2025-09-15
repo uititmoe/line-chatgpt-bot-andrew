@@ -366,22 +366,29 @@ export default async function handler(req, res) {
           }
 
           if (targetLog) {
-            targetLog.deleted = true; // 統一軟刪除（總結時會排除）
+            // 統一軟刪除，避免打亂 logs 順序
+            targetLog.deleted = true;
 
-            // 同步刪除到 Google Sheet（Apps Script 端需支援 action=delete）
-            await syncToSheet({
-              action: "delete",
-              timeISO: targetLog.timeISO,
-              timeDisplay: targetLog.timeDisplay,
-            });
+            // 通知 Google Sheet 刪除
+            try {
+              await fetch(process.env.SHEET_WEBHOOK_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "delete",
+                  timeISO: targetLog.timeISO || "",
+                  timeDisplay: targetLog.timeDisplay || "",
+                }),
+              });
+            } catch (e) {
+              console.error("[Google Sheet 撤銷錯誤]", e);
+            }
 
             aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${targetLog.summary || "(無摘要)"}`;
           } else {
             aiText = "⚠️ 沒有可撤銷的紀錄";
           }
-        }
           
-
         // -------- 2) 補記 --------
         else if (isBacklogMessage(userText)) {
           const content = userText.replace(/^補記[:：]?\s*/, "");
@@ -537,7 +544,12 @@ export default async function handler(req, res) {
           }
         }
 
-        await lineReply(event.replyToken, aiText);
+        try {
+          await lineReply(event.replyToken, aiText);
+        } catch (e) {
+          console.error("[LINE REPLY 錯誤]", e);
+        }
+  
       }
     }
 
