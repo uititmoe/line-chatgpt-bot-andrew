@@ -363,15 +363,40 @@ export default async function handler(req, res) {
         const userText = event.message.text.trim();
         let aiText = "";
 
-        /** 撤銷上一則 */
-        if (isUndoRequest(userText)) {
-          if (logs.length > 0) {
-            const removed = logs.pop();
-            aiText = `↩️ 已撤銷上一筆紀錄：${removed.summary || "(無摘要)"}`;
-          } else {
-            aiText = "⚠️ 沒有可撤銷的紀錄";
-          }
+        /** 撤銷處理 */
+        else if (isUndoRequest(userText)) {
+          let targetLog = null;
+        
+          // 嘗試解析「撤銷 <時間字串>」
+        const parts = userText.split(" ");
+        if (parts.length > 1) {
+          const targetTime = parts[1].trim();
+          targetLog = logs.find(
+            (log) =>
+              log.timeISO === targetTime ||
+              log.timeDisplay === targetTime
+          );
         }
+        
+        // 如果沒指定時間 → fallback 成撤銷最後一筆
+        if (!targetLog && logs.length > 0) {
+          targetLog = logs.pop(); // ← 注意這裡是直接移除最後一筆
+        }
+        
+        if (targetLog) {
+          // 如果是指定時間找到的 → 軟刪除，避免打亂順序
+          if (targetLog && !userText.includes("上一則") && parts.length > 1) {
+            targetLog.deleted = true;
+          }
+          
+          aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
+            targetLog.summary || "(無摘要)"
+          }`;
+        } else {
+          aiText = "⚠️ 沒有可撤銷的紀錄";
+        }
+      }
+
         
         /** 即時紀錄 */
         else if (isLogCandidate(userText)) {
@@ -455,6 +480,12 @@ export default async function handler(req, res) {
             return false;
           });
 
+          else {
+          // 清單
+          const list = rangeLogs.map(
+            (log, i) =>
+              `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
+          );
           if (rangeLogs.length === 0) {
             aiText = `📊 ${
               customDate
@@ -467,26 +498,25 @@ export default async function handler(req, res) {
             }`;
           } else {
             
-            // 主模組統計
-            const stats = {};
-            rangeLogs.forEach((log) =>
-              log.main.forEach((m) => (stats[m] = (stats[m] || 0) + 1))
-            );
-            const statLines = Object.entries(stats).map(
-              ([k, v]) => `${k}: ${v} 筆`
-            );
+          // 主模組統計
+          const stats = {};
+          rangeLogs.forEach((log) =>
+          log.main.forEach((m) => (stats[m] = (stats[m] || 0) + 1))
+          );
+          const statLines = Object.entries(stats).map(
+          ([k, v]) => `${k}: ${v} 筆`
+          );
 
-            aiText = `📊 ${
-              customDate
-                ? `${md[1]}/${md[2]} 單日總結`
-                : rangeType === "today"
-                ? "今日總結"
-                : rangeType === "week"
-                ? "本週總結"
-                : "本月總結"
-            }\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
+          aiText = `📊 ${
+          customDate
+            ? `${md[1]}/${md[2]} 單日總結`
+            : rangeType === "today"
+            ? "今日總結"
+            : rangeType === "week"
+            ? "本週總結"
+            : "本月總結"
+          }\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
           }
-        }
 
         /** 一般對話 */
        else {
