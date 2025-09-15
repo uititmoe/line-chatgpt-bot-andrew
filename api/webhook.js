@@ -6,9 +6,12 @@ const {
   LINE_CHANNEL_ACCESS_TOKEN,
   OPENAI_API_KEY,
   SYSTEM_MESSAGE,
+  SHEET_WEBHOOK_URL, // Google Sheet webhook URL
 } = process.env;
 
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+let logs = [];
+let chatHistory = [];
 
 /** -----------------------------
  *  修正重點 1：全域暫存 logs（新）
@@ -44,6 +47,24 @@ async function lineReply(replyToken, text) {
   console.log("[LINE REPLY] Response", { status: resp.status, text: respText });
 
   return resp.ok;
+}
+
+/** 同步到 Google Sheet */
+async function syncToSheet(log) {
+  if (!SHEET_WEBHOOK_URL) {
+    console.error("❌ SHEET_WEBHOOK_URL 未設定");
+    return;
+  }
+
+  try {
+    await fetch(SHEET_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(log),
+    });
+  } catch (e) {
+    console.error("[同步 Google Sheet 失敗]", e);
+  }
 }
 
 /** -----------------------------
@@ -380,12 +401,35 @@ export default async function handler(req, res) {
         /** 總結 */
         else if (isSummaryRequest(userText)) {
           let rangeType = "today";
-          if (userText.includes("週")) rangeType = "week";
-          if (userText.includes("月")) rangeType = "month";
+          let customDate = null;
 
-          const { start, end } = getDateRange(rangeType);
+          if (userText.includes("週")) {
+            rangeType = "week";
+          } else if (userText.includes("月")) {
+            rangeType = "month";
+          } else {
+            // 嘗試抓 "M/D總結" 或 "M-D總結"
+            const md = userText.match(/(\d{1,2})[\/\-](\d{1,2})/);
+            if (md) {
+              const m = parseInt(md[1], 10);
+              const d = parseInt(md[2], 10);
+              const y = new Date().getFullYear(); // 預設為今年
+              customDate = new Date(y, m - 1, d);
+              rangeType = "custom";
+            }
+          }
 
-          // 依範圍過濾
+          let start, end;
+          if (rangeType === "custom" && customDate) {
+            start = new Date(customDate);
+            start.setHours(0, 0, 0, 0);
+            end = new Date(customDate);
+            end.setHours(23, 59, 59, 999);
+          } else {
+            ({ start, end } = getDateRange(rangeType));
+          }
+
+          // 範圍內的紀錄
           const rangeLogs = logs.filter((log) => {
             if (log.timeISO) {
               const t = new Date(log.timeISO);
@@ -395,11 +439,17 @@ export default async function handler(req, res) {
           });
 
           if (rangeLogs.length === 0) {
-            aiText = `📊 這${
-              rangeType === "today" ? "天" : rangeType === "week" ? "週" : "月"
-            }還沒有紀錄喔～`;
+            aiText = `📊 ${
+              rangeType === "today"
+                ? "今天"
+                : rangeType === "week"
+                ? "本週"
+                : rangeType === "month"
+                ? "本月"
+                : `${customDate.getMonth() + 1}/${customDate.getDate()}`
+            } 還沒有紀錄喔～`;
           } else {
-            // 清單
+            // 列表
             const list = rangeLogs.map(
               (log, i) =>
                 `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(
@@ -412,18 +462,71 @@ export default async function handler(req, res) {
             rangeLogs.forEach((log) =>
               log.main.forEach((m) => (stats[m] = (stats[m] || 0) + 1))
             );
-            const statLines = Object.entries(stats).map(
-              ([k, v]) => `${k}: ${v} 筆`
-            );
+            const statLines = Object.entries(stats).map(([k, v]) => `${k}: ${v} 筆`);
 
             aiText = `📊 ${
-              rangeType === "today" ? "今日" : rangeType === "week" ? "本週" : "本月"
-            }總結\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join(
-              "\n"
-            )}`;
+              rangeType === "today"
+                ? "今日"
+                : rangeType === "week"
+                ? "本週"
+                : rangeType === "month"
+                ? "本月"
+                : `${customDate.getMonth() + 1}/${customDate.getDate()}`
+            } 總結\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
           }
         }
-        
+
+
+        /** 總結範圍 */
+function getDateRange(type) {
+  const now = new Date();
+  const start = new Date(now);
+  let end = new Date(now);
+
+  if (type === "today") {
+    start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
+  } else if (type === "week") {
+    const day = now.getDay();
+    const diff = day === 0 ? 6 : day - 1;
+    start.setDate(now.getDate() - diff);
+    start.setHours(0, 0, 0, 0);
+    end = new Date(start);
+    end.setDate(start.getDate() + 7);
+  } else if (type === "month") {
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+    end = new Date(start);
+    end.setMonth(start.getMonth() + 1);
+  }
+
+  return { start, end };
+}
+
+export default async function handler(req, res) {
+  try {
+    if (req.method !== "POST") return res.status(405).send("Method Not Allowed");
+
+    const chunks = [];
+    await new Promise((resolve, reject) => {
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", resolve);
+      req.on("error", reject);
+    });
+    const rawBody = Buffer.concat(chunks);
+    const signature = req.headers["x-line-signature"];
+
+    if (!verifyLineSignature(rawBody, signature)) {
+      return res.status(403).send("Invalid signature");
+    }
+
+    const body = JSON.parse(rawBody.toString("utf8"));
+
+    for (const event of body.events || []) {
+      if (event.type === "message" && event.message?.type === "text") {
+        const userText = event.message.text.trim();
+        let aiText = "我這邊忙線一下，等等再試。";
+
         /** 補記 */
         else if (isBacklogMessage(userText)) {
           const content = userText.replace(/^補記[:：]?\s*/, "");
@@ -447,6 +550,20 @@ export default async function handler(req, res) {
 
           aiText = `📝 補記：${t.display}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
           }
+
+// === 新增：同步到 Google Sheet ===
+await fetch("https://script.google.com/macros/s/你的ScriptID/exec", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    type: "backlog",
+    timeISO: t.iso,
+    timeDisplay: t.display,
+    summary,
+    main: category.main,
+    tags: category.tags,
+  }),
+});
 
         /** 即時紀錄 */
         else if (isLogCandidate(userText)) {
