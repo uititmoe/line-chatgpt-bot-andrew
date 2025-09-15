@@ -123,20 +123,35 @@ async function summarizeEvent(text) {
   }
 }
 
+/** 小語（SYSTEM_MESSAGE + 規則混合版；支援補記語氣） */
 async function generateShortPhrase(text, isBacklog = false) {
   try {
     const r = await openai.chat.completions.create({
       model: "gpt-4o",
+      temperature: 0.7,
       max_tokens: 50,
       messages: [
-        { role: "system", content: "你是 Jean 的 LINE 助理，熟悉他的生活狀態與語氣風格。" },
         {
-          role: "user",
-          content: `這是一則${isBacklog ? "補記" : "即時"}紀錄：「${text}」。請生成一句不超過30字的自然短語，語氣自然，不要照抄原文。`,
+          role: "system",
+          content: `${SYSTEM_MESSAGE || "你是熟悉 Jean 的助理"}
+
+任務指令：
+請根據輸入內容生成一句不超過 30 字的短語。
+
+規則：
+- 即時紀錄 → 用現在進行式，像陪伴聊天。
+- 補記 → 用已完成/回顧語氣，避免「正在、準備」。
+- 語氣自然，像熟人，輕鬆幽默即可。
+- 可以給予簡單的鼓勵或依表達的心情回應，也可針對內容進行小提醒或知識補充。
+- 避免浮誇、網路流行語，不要加句號。`,
         },
+        { role: "user", content: text },
       ],
     });
-    return r.choices[0].message.content.trim();
+
+    let short = r.choices[0]?.message?.content?.trim() || "";
+    short = short.replace(/[。！？、,.]$/, "");
+    return short || "（狀態已記錄）";
   } catch (e) {
     console.error("[短語生成錯誤]", e);
     return "（狀態已記錄）";
