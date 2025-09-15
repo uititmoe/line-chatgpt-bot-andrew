@@ -95,6 +95,12 @@ function parseDateTimeDetailed(text) {
     m = t.getMonth() + 1;
     d = t.getDate();
     hadDate = true;
+  } else if (/今天/.test(text)) {
+    const t = new Date(taiwanNow);
+    y = t.getFullYear();
+    m = t.getMonth() + 1;
+    d = t.getDate();
+    hadDate = true;
   } else if (/昨天/.test(text)) {
     const t = new Date(taiwanNow);
     t.setDate(t.getDate() - 1);
@@ -163,6 +169,11 @@ async function syncToSheet(log) {
   } catch (e) {
     console.error("[Google Sheet 同步失敗]", e);
   }
+  if (e.parameter.action === "delete") {
+  const timeISO = e.parameter.timeISO;
+  const timeDisplay = e.parameter.timeDisplay;
+  // 找到符合的列，做刪除或標記刪除
+  }
 }
 
 // -----------------------------
@@ -208,7 +219,7 @@ function isLogCandidate(text) {
 // 分類（含藝廊 & 辦公室的 keyword 判斷）
 // -----------------------------
 const galleryKeywords = ["藝廊", "展覽", "展場", "佈展", "撤展", "策展", "會計", "收據", "做網站", "架網站", "朝朝", "陸角銀", "講座", "顧展", "收展", "展品", "藝術家", "寄賣", "分潤", "對帳"];
-const officeActions = ["打掃", "清理", "整理", "收納", "維護", "修繕", "補貨", "檢查"];
+const officeActions = ["打掃", "清理", "整理", "收納", "維護", "修繕", "補貨", "檢查", "收租", "轉帳"];
 
 async function classifyStateLog(text) {
   try {
@@ -366,50 +377,49 @@ export default async function handler(req, res) {
         /** 1.撤銷處理 */
         if (isUndoRequest(userText)) {
           let targetLog = null;
-        
+
           // 嘗試解析「撤銷 <時間字串>」
-        const parts = userText.split(" ");
-        if (parts.length > 1) {
-          const targetTime = parts[1].trim();
-          targetLog = logs.find(
-            (log) =>
-              log.timeISO === targetTime ||
-              log.timeDisplay === targetTime
-          );
-        }
-        
-        // 如果沒指定時間 → fallback 成撤銷最後一筆
-        if (!targetLog && logs.length > 0) {
-          targetLog = logs.pop(); // ← 注意這裡是直接移除最後一筆
-        }
-        
-        if (targetLog) {
-          // 如果是指定時間找到的 → 軟刪除，避免打亂順序
-          if (targetLog && !userText.includes("上一則") && parts.length > 1) {
-            targetLog.deleted = true;
+          const parts = userText.split(" ");
+          if (parts.length > 1) {
+            const targetTime = parts[1].trim();
+            targetLog = logs.find(
+              (log) =>
+                !log.deleted &&
+                (log.timeISO === targetTime || log.timeDisplay === targetTime)
+            );
           }
-          
-          try {
-            await fetch(process.env.SHEET_WEBHOOK_URL, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                action: "delete",
-                timeISO: targetLog.timeISO,
-                timeDisplay: targetLog.timeDisplay,
-              }),
-            });
-          } catch (e) {
-            console.error("[Google Sheet 撤銷錯誤]", e);
+
+          // 如果沒指定時間 → fallback 成撤銷最後一筆
+          if (!targetLog && logs.length > 0) {
+            targetLog = [...logs].reverse().find((log) => !log.deleted);
           }
-          
-          aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
-            targetLog.summary || "(無摘要)"
-          }`;
-        } else {
-          aiText = "⚠️ 沒有可撤銷的紀錄";
+
+          if (targetLog) {
+            targetLog.deleted = true; // 統一採用軟刪除
+
+            // 同步刪除 Google Sheet
+            try {
+              await fetch(process.env.SHEET_WEBHOOK_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "delete",
+                  timeISO: targetLog.timeISO,
+                  timeDisplay: targetLog.timeDisplay,
+                }),
+              });
+            } catch (e) {
+              console.error("[Google Sheet 撤銷錯誤]", e);
+            }
+        
+            aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
+              targetLog.summary || "(無摘要)"
+            }`;
+          } else {
+            aiText = "⚠️ 沒有可撤銷的紀錄";
+          }
         }
-      }          
+          
         /** 2.補記 */
         else if (isBacklogMessage(userText)) {
           const content = userText.replace(/^補記[:：]?\s*/, "");
@@ -461,7 +471,8 @@ export default async function handler(req, res) {
           // 判斷週/月
           if (userText.includes("週")) rangeType = "week";
           if (userText.includes("月")) rangeType = "month";
-          
+
+          const rangeLogs = logs.filter((log) => !log.deleted && log.timeISO);
           const { start, end } = getDateRange(rangeType);
           // 判斷日期格式（mm/dd 或 mm-dd）
           const md = userText.match(/(\d{1,2})[\/\-](\d{1,2})/);
