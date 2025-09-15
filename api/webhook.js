@@ -63,7 +63,7 @@ function isLogCandidate(text) {
     "我覺得", "我希望", "我猜", "我認為", 
     "可以幫", "能不能", "要不要", "是不是" , "你" 
   ];
-    // 非記錄語氣 → 一律當對話
+  // 非記錄語氣 → 一律當對話
   if (nonLogPhrases.some(p => text.startsWith(p) || text.includes(p))) {
     return false;
   }  
@@ -207,7 +207,7 @@ async function classifyStateLog(text) {
     // 辦公室維運（必須同時出現「辦公室」+ 行為詞，或包含「洗衣店」）
     if (
       (text.includes("辦公室") && officeActions.some((kw) => text.includes(kw))) ||
-      text.includes("洗衣店")
+      (text.includes("洗衣店") && officeActions.some((kw) => text.includes(kw)))
     ) {
       return { main: ["E. 辦公室維運"], tags: ["🧹 環境整理"] };
     }
@@ -223,6 +223,10 @@ async function classifyStateLog(text) {
 請把輸入訊息分成：
 1. 主模組（五選一：A. 藝廊工作, B. Podcast, C. 商業漫畫, D. 同人與委託, E. 辦公室維運, F. 生活日常）
 2. 輔助分類（可多選：創作／交通／行政／財務／SNS／飲食／健康／社交／休息／其他）
+⚠️ 注意：
+- 僅在輸入同時包含「辦公室」+（打掃、清理、整理、收納、維護、修繕、補貨、檢查）等處理辦公室事務時，才算 E. 辦公室維運。
+- 單純提到「到辦公室、在辦公室」但沒有維護行為，要分類為 F. 生活日常。
+- 「洗衣店」只有搭配維護相關行為才算辦公室維運。`
 只回 JSON，例如：
 {"main":["C. 商業漫畫"], "tags":["📢 SNS／宣傳","🧾 行政"]}`,
         },
