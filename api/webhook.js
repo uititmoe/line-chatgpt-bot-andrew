@@ -508,9 +508,16 @@ export default async function handler(req, res) {
 
           // 過濾範圍（排除撤銷、無 ISO 的模糊補記）
           const rangeLogs = logs.filter((log) => {
-            if (log.deleted || !log.timeISO) return false;
-            const t = new Date(log.timeISO);
-            return t >= start && t <= end;
+            if (log.deleted) return false;
+            
+            if (log.timeISO) {
+               // 有 ISO → 精確判斷區間
+               const t = new Date(log.timeISO);
+               return t >= start && t < end;
+            } else {
+               // 沒有 ISO（模糊時間）→ 一律保留
+               return true;
+            }
           });
 
           const title =
