@@ -172,7 +172,7 @@ function isBacklogMessage(text) {
   return /^補記/.test(text.trim());
 }
 function isSummaryRequest(text) {
-  return text.includes("總結"); // 可再擴充：摘要 / 整理
+  return text.includes("總結"); 
 }
 function isUndoRequest(text) {
   return text.includes("撤銷") || text.includes("刪除上一則");
@@ -287,7 +287,7 @@ async function generateShortPhrase(text, isBacklog = false) {
 - 語氣自然，像熟人，輕鬆幽默即可。
 - 可以有簡單鼓勵、心情回應、提醒或小知識。
 - 避免浮誇、網路流行語。
-- 句尾保持自然標點（句號、驚嘆號、問號均可）。
+- 句尾保持自然標點（句號、驚嘆號、問號均可），偶爾可使用表情符號。
 - 短語長度可在 10–50 字之間變化。
 - 句型保持多樣化，不要每次都以相同字詞（如「開始」「準備」）開頭。
 - 可以偶爾加入隱性的情緒或效果描述（例如「空間清爽多了」「看來會很忙碌」）。`,
@@ -349,14 +349,13 @@ export default async function handler(req, res) {
     });
     const rawBody = Buffer.concat(chunks);
     const body = JSON.parse(rawBody.toString("utf8"));
-    
+
     const signature = req.headers["x-line-signature"];
     if (!verifyLineSignature(rawBody, signature)) {
       console.warn("[SIGNATURE] 驗證失敗");
       return res.status(403).send("Invalid signature");
     }
 
-    const body = JSON.parse(rawBody.toString("utf8"));
     console.log("[INCOMING BODY]", JSON.stringify(body));
 
     for (const event of body.events || []) {
@@ -419,31 +418,73 @@ export default async function handler(req, res) {
           
         /** 總結 */
         else if (isSummaryRequest(userText)) {
-          let rangeType = "today";
+          let rangeType = "today";// 預設今天
+          let customDate = null;
+          
+          // 判斷週/月
           if (userText.includes("週")) rangeType = "week";
           if (userText.includes("月")) rangeType = "month";
           
           const { start, end } = getDateRange(rangeType);
+          // 判斷日期格式（mm/dd 或 mm-dd）
+          const md = userText.match(/(\d{1,2})[\/\-](\d{1,2})/);
+          if (md) {
+            const now = new Date();
+            const y = now.getFullYear();
+            const m = parseInt(md[1], 10) - 1;
+            const d = parseInt(md[2], 10);
+            customDate = new Date(y, m, d);
+          }
 
-          // 依範圍過濾
+          let start, end;
+          if (customDate) {
+            start = new Date(customDate.setHours(0, 0, 0, 0));
+            end = new Date(customDate.setHours(23, 59, 59, 999));
+          } else {
+            const range = getDateRange(rangeType);
+            start = range.start;
+            end = range.end;
+          }
+          
+          // 篩選 logs
           const rangeLogs = logs.filter((log) => {
             if (log.timeISO) {
               const t = new Date(log.timeISO);
-              return t >= start && t < end;
+              return t >= start && t <= end;
             }
             return false;
           });
 
           if (rangeLogs.length === 0) {
-            aiText = `📊 這${rangeType === "today" ? "天" : rangeType === "week" ? "週" : "月"}還沒有紀錄喔～`;
+            aiText = `📊 ${
+              customDate
+                ? `${md[1]}/${md[2]} 沒有紀錄`
+                : rangeType === "today"
+                ? "今天還沒有紀錄喔～"
+                : rangeType === "week"
+                ? "這週還沒有紀錄喔～"
+                : "這個月還沒有紀錄喔～"
+            }`;
           } else {
-            const list = rangeLogs.map((log, i) => `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`);
-            const stats = {};
             
             // 主模組統計
-            rangeLogs.forEach((log) => log.main.forEach((m) => (stats[m] = (stats[m] || 0) + 1)));
-            const statLines = Object.entries(stats).map(([k, v]) => `${k}: ${v} 筆`);
-            aiText = `📊 ${rangeType === "today" ? "今日" : rangeType === "week" ? "本週" : "本月"}總結\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
+            const stats = {};
+            rangeLogs.forEach((log) =>
+              log.main.forEach((m) => (stats[m] = (stats[m] || 0) + 1))
+            );
+            const statLines = Object.entries(stats).map(
+              ([k, v]) => `${k}: ${v} 筆`
+            );
+
+            aiText = `📊 ${
+              customDate
+                ? `${md[1]}/${md[2]} 單日總結`
+                : rangeType === "today"
+                ? "今日總結"
+                : rangeType === "week"
+                ? "本週總結"
+                : "本月總結"
+            }\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
           }
         }
 
