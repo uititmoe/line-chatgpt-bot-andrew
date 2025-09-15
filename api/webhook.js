@@ -47,7 +47,9 @@ function isBacklogMessage(text) {
 function isSummaryRequest(text) {
   return text.includes("總結");
 }
+
 function isLogCandidate(text) {
+    
   // 問句排除
   if (/[嗎\?？]$/.test(text)) return false;
   const nonLogPhrases = ["我覺得", "我希望", "我猜", "我認為", "可以幫", "能不能", "要不要", "是不是", "你"];
