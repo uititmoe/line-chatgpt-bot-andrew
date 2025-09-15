@@ -363,8 +363,8 @@ export default async function handler(req, res) {
         const userText = event.message.text.trim();
         let aiText = "";
 
-        /** 撤銷處理 */
-        else if (isUndoRequest(userText)) {
+        /** 1.撤銷處理 */
+        if (isUndoRequest(userText)) {
           let targetLog = null;
         
           // 嘗試解析「撤銷 <時間字串>」
@@ -389,36 +389,28 @@ export default async function handler(req, res) {
             targetLog.deleted = true;
           }
           
+          try {
+            await fetch(process.env.SHEET_WEBHOOK_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "delete",
+                timeISO: targetLog.timeISO,
+                timeDisplay: targetLog.timeDisplay,
+              }),
+            });
+          } catch (e) {
+            console.error("[Google Sheet 撤銷錯誤]", e);
+          }
+          
           aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
             targetLog.summary || "(無摘要)"
           }`;
         } else {
           aiText = "⚠️ 沒有可撤銷的紀錄";
         }
-      }
-
-        
-        /** 即時紀錄 */
-        else if (isLogCandidate(userText)) {
-          const category = await classifyStateLog(userText);
-          const summary = await summarizeEvent(userText);
-          const shortPhrase = await generateShortPhrase(userText, false);
-
-          const logItem = {
-            type: "instant",
-            timeISO: nowUtcISO(),
-            timeDisplay: nowTaipeiDisplay(),
-            summary,
-            main: category.main,
-            tags: category.tags,
-          };
-          logs.push(logItem);
-          await syncToSheet(logItem);
-
-          aiText = `🕰️ 已記錄：${logItem.timeDisplay}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
-        }
-
-        /** 補記 */
+      }          
+        /** 2.補記 */
         else if (isBacklogMessage(userText)) {
           const content = userText.replace(/^補記[:：]?\s*/, "");
           const t = parseDateTimeDetailed(content);
@@ -439,9 +431,29 @@ export default async function handler(req, res) {
           await syncToSheet(logItem);
 
           aiText = `📝 補記：${logItem.timeDisplay}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
+        }          
+        
+        /** 3.即時紀錄 */
+        else if (isLogCandidate(userText)) {
+          const category = await classifyStateLog(userText);
+          const summary = await summarizeEvent(userText);
+          const shortPhrase = await generateShortPhrase(userText, false);
+
+          const logItem = {
+            type: "instant",
+            timeISO: nowUtcISO(),
+            timeDisplay: nowTaipeiDisplay(),
+            summary,
+            main: category.main,
+            tags: category.tags,
+          };
+          logs.push(logItem);
+          await syncToSheet(logItem);
+
+          aiText = `🕰️ 已記錄：${logItem.timeDisplay}\n📌 狀態：${summary}\n📂 主模組：${category.main.join(" + ") || "無"}\n🏷️ 輔助：${category.tags.join(" + ") || "無"}\n\n${shortPhrase}`;
         }
-          
-        /** 總結 */
+
+        /** 4.總結 */
         else if (isSummaryRequest(userText)) {
           let rangeType = "today";// 預設今天
           let customDate = null;
@@ -479,13 +491,8 @@ export default async function handler(req, res) {
             }
             return false;
           });
-
-          else {
+          
           // 清單
-          const list = rangeLogs.map(
-            (log, i) =>
-              `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
-          );
           if (rangeLogs.length === 0) {
             aiText = `📊 ${
               customDate
@@ -497,6 +504,10 @@ export default async function handler(req, res) {
                 : "這個月還沒有紀錄喔～"
             }`;
           } else {
+            const list = rangeLogs.map(
+              (log, i) =>
+                `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
+            );
             
           // 主模組統計
           const stats = {};
@@ -518,7 +529,7 @@ export default async function handler(req, res) {
           }\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
           }
 
-        /** 一般對話 */
+        /** 5.一般對話 */
        else {
          try {
            // 保存使用者訊息
