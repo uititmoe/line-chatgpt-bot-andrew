@@ -350,6 +350,7 @@ export default async function handler(req, res) {
     const rawBody = Buffer.concat(chunks);
     const body = JSON.parse(rawBody.toString("utf8"));
     
+    const signature = req.headers["x-line-signature"];
     if (!verifyLineSignature(rawBody, signature)) {
       console.warn("[SIGNATURE] 驗證失敗");
       return res.status(403).send("Invalid signature");
@@ -394,18 +395,18 @@ export default async function handler(req, res) {
         }
 
         /** 補記 */
-        if (isBacklogMessage(userText)) {
+        else if (isBacklogMessage(userText)) {
           const content = userText.replace(/^補記[:：]?\s*/, "");
-          const t = parseDateTimeDetailed(content); // { display, iso }
-          
+          const t = parseDateTimeDetailed(content);
+
           const category = await classifyStateLog(content);
           const summary = await summarizeEvent(content);
           const shortPhrase = await generateShortPhrase(content, true);
 
           const logItem = {
             type: "backlog",
-            timeISO: nowUtcISO(),
-            timeDisplay: nowTaipeiDisplay(),
+            timeISO: t.iso || nowUtcISO(),
+            timeDisplay: t.display,
             summary,
             main: category.main,
             tags: category.tags,
