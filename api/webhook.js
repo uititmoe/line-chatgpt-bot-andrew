@@ -349,16 +349,24 @@ export default async function handler(req, res) {
 
         // -------- 1) 撤銷（支援：撤銷 <時間戳>；否則撤銷最後一筆） --------
         if (isUndoRequest(userText)) {
-          let targetLog = null;        
-          const timeString = userText.replace(/^撤銷\s*/, "").trim(); // 拿掉「撤銷」兩字，保留後面整段（避免只取到第一個空格前）
+          let targetLog = null;
+          const timeString = userText.replace(/^撤銷\s*/, "").trim(); // 取出「撤銷」後面的時間字串
           
-          // 沒指定 → 找最後一筆未刪除
+          if (timeString) {
+            // 嘗試找出符合的 log
+            targetLog = logs.find(
+              (log) =>
+                !log.deleted &&
+                (log.timeISO === timeString || log.timeDisplay === timeString)
+            );
+          }
+          
+          // 沒指定時間 → fallback 找最後一筆未刪除
           if (!targetLog && logs.length > 0) {
-            targetLog = [...logs].reverse().find((log) => !log.deleted);     
+            targetLog = [...logs].reverse().find((log) => !log.deleted); 
           }
           
           if (targetLog) {
-            // 軟刪除
             targetLog.deleted = true;
             
             // 同步刪除 Google Sheet
@@ -376,11 +384,15 @@ export default async function handler(req, res) {
               console.error("[Google Sheet 撤銷錯誤]", e);
             }
             
-            aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${targetLog.summary || "(無摘要)"}`;
+            aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
+              targetLog.summary || "(無摘要)"
+            }`;
+          
           } else {
             aiText = `⚠️ 沒有找到時間為「${timeString}」的紀錄`;
-          }
+              }
         }
+
           
 // 復原
 else if (userText.trim().startsWith("復原")) {
