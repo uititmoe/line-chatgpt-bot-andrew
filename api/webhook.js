@@ -622,9 +622,10 @@ else if (userText.trim().startsWith("復原")) {
             });
 
             const replyText = (r.choices[0]?.message?.content || "").trim();
-                 
-            aiText = aiText.replace(/\*\*/g, "");　// 清理 Markdown 粗體符號（**...** → ...）
-            aiText = formattedReply.slice(0, 1900);　// 確保不超過 LINE 限制
+            
+            // 移除 ** 粗體符號
+            let formattedReply = replyText.replace(/\*\*/g, "");
+            aiText = formattedReply.slice(0, 1900); // 確保不超過 LINE 限制
             
           } catch (e) {
             console.error("[OpenAI 對話錯誤]", e);
