@@ -596,9 +596,11 @@ export default async function handler(req, res) {
               ],
             });
 
-            const replyText = (r.choices?.[0]?.message?.content || "").trim();
-            chatHistory.push({ role: "assistant", content: replyText });
-            aiText = replyText.slice(0, 1900);
+            const replyText = (r.choices[0]?.message?.content || "").trim();
+            
+            let aiText = replyText.replace(/\n/g, "\n\n"); // 確保換行
+            aiText = aiText.replace(/\*\*/g, "");         // 去掉粗體符號
+            aiText = aiText.slice(0, 1900);               // 最後再切字數
           } catch (e) {
             console.error("[OpenAI 對話錯誤]", e);
             aiText = "我這邊忙線一下，等等再試。";
