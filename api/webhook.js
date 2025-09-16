@@ -14,6 +14,8 @@ const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 // --- 模組級暫存（冷啟動會清空） ---
 let logs = [];        // { type, timeISO, timeDisplay, summary, main[], tags[], deleted? }
 let chatHistory = []; // 對話延續
+// 暫存撤銷紀錄，用於復原
+let lastUndone = null;
 
 // ---------------- 工具：時間 ----------------
 function nowUtcISO() {
@@ -84,6 +86,9 @@ function isSummaryRequest(text) {
 }
 function isUndoRequest(text) {
   return text.includes("撤銷") || text.includes("刪除上一則");
+}
+function isRedoRequest(text) {
+  return text.includes("復原");
 }
 
 function isLogCandidate(text) {
@@ -209,10 +214,7 @@ async function classifyStateLog(text) {
 請把輸入訊息分成：
 1. 主模組（五選一：A. 藝廊工作, B. Podcast, C. 商業漫畫, D. 同人與委託, E. 辦公室維運, F. 生活日常）
 2. 輔助分類（可多選：創作／交通／行政／財務／SNS／飲食／健康／社交／休息／其他）
-⚠️ 注意：
-- 僅在輸入同時包含「辦公室」+（打掃、清理、整理、收納、維護、修繕、補貨、檢查）等處理辦公室事務時，才算 E. 辦公室維運。
-- 單純提到「到辦公室、在辦公室」但沒有維護行為，要分類為 F. 生活日常。
-- 「洗衣店」只有搭配維護相關行為才算辦公室維運。`
+注意：只有同時包含「辦公室」+ 行為詞（打掃/整理/維護/修繕/補貨/檢查），或包含「洗衣店」時，才歸為 E. 辦公室維運。
 只回 JSON，例如：
 {"main":["C. 商業漫畫"], "tags":["📢 SNS／宣傳","🧾 行政"]}`,
         },
@@ -251,14 +253,15 @@ async function summarizeEvent(text) {
 async function generateShortPhrase(text, isBacklog = false) {
   try {
     const r = await openai.chat.completions.create({
-      model: "gpt-4o",  // ✅ 用主模型，不要 mini，保證語氣多變
+      model: "gpt-4o",
       max_tokens: 120,
+      temperature: 0.7,
       messages: [
         {
           role: "system",
           content:
             (SYSTEM_MESSAGE || "你是 Jean 的 LINE 助理，用繁體中文自然回應。") +
-              `
+            `
 任務指令：
 請根據輸入內容生成一句不超過 50 字的短語。
 
@@ -269,22 +272,18 @@ async function generateShortPhrase(text, isBacklog = false) {
 - 可以有簡單鼓勵、心情回應、提醒或小知識。
 - 避免浮誇、網路流行語。
 - 句尾保持自然標點（句號、驚嘆號、問號均可）。
+- 偶爾可以使用表情符號，但不過度輕浮。
 - 短語長度可在 10–50 字之間變化。
 - 句型保持多樣化。
 - 可偶爾加入隱性情緒或效果描述（例如「空間清爽多了」「看來會很忙碌」）。`,
         },
         {
           role: "user",
-          content: isBacklog
-            ? `這是一則補記：${text}`
-            : `這是一則即時紀錄：${text}`,
+          content: isBacklog ? `這是一則補記：${text}` : `這是一則即時紀錄：${text}`,
         },
       ],
-      max_tokens: 80, // 保險範圍，足夠生成 50 字左右中文
-      temperature: 0.7,
     });
-
-    return r.choices[0].message.content.trim();
+    return (r.choices?.[0]?.message?.content || "（狀態已記錄）").trim();
   } catch (e) {
     console.error("[短語生成錯誤]", e);
     return "（狀態已記錄）";
@@ -351,47 +350,87 @@ export default async function handler(req, res) {
         // -------- 1) 撤銷（支援：撤銷 <時間戳>；否則撤銷最後一筆） --------
         if (isUndoRequest(userText)) {
           let targetLog = null;
-
-          // 嘗試解析「撤銷 <時間字串>」
           const parts = userText.split(" ");
-          if (parts.length > 1) {
-            const targetTime = parts[1].trim();
-            for (let i = logs.length - 1; i >= 0; i--) {
-              if (
-                logs[i].timeISO === targetTime ||
-                logs[i].timeDisplay === targetTime
-              ) {
-                targetLog = logs[i];
-                targetLog.deleted = true; // 軟刪除
-                break;
-              }
+          let targetTime = parts.length > 1 ? parts[1].trim() : null;
+
+          if (targetTime) {
+            // 先比對 ISO
+            targetLog = logs.find(
+              (log) => !log.deleted && log.timeISO && log.timeISO === targetTime
+            );
+            // 再比對顯示時間
+            if (!targetLog) {
+              targetLog = logs.find(
+                (log) => !log.deleted && log.timeDisplay === targetTime
+              );
             }
           }
 
-          // 如果沒指定時間 → fallback 成撤銷最後一筆
+          // 沒指定時間 → 撤銷最後一筆未刪除
           if (!targetLog && logs.length > 0) {
-            targetLog = logs.pop();
+            targetLog = [...logs].reverse().find((log) => !log.deleted);
           }
 
           if (targetLog) {
+            targetLog.deleted = true;
+            lastUndone = targetLog; // 存進暫存區
+
+            // Google Sheet 同步刪除
             try {
-              await syncToSheet({
-                action: "delete",
-                timeISO: targetLog.timeISO,
-                timeDisplay: targetLog.timeDisplay,
+              const res = await fetch(process.env.SHEET_WEBHOOK_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "delete",
+                  timeISO: targetLog.timeISO || "",
+                  timeDisplay: targetLog.timeDisplay || "",
+                }),
               });
+              const result = await res.text();
+              aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
+                targetLog.summary || "(無摘要)"
+              }\n🗂️ Sheet 回應：${result}`;
             } catch (e) {
               console.error("[Google Sheet 撤銷錯誤]", e);
+              aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}（⚠️ Sheet 同步失敗）`;
             }
-
-            aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
-              targetLog.summary || "(無摘要)"
-            }`;
           } else {
             aiText = "⚠️ 沒有可撤銷的紀錄";
           }
         }
 
+        // -------- 復原處理 --------
+        else if (isRedoRequest(userText)) {
+          if (lastUndone) {
+            lastUndone.deleted = false;
+
+            // Google Sheet 同步復原
+            try {
+              const res = await fetch(process.env.SHEET_WEBHOOK_URL, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "restore",
+                  timeISO: lastUndone.timeISO || "",
+                  timeDisplay: lastUndone.timeDisplay || "",
+                  summary: lastUndone.summary || "",
+                  main: lastUndone.main || [],
+                  tags: lastUndone.tags || [],
+                }),
+              });
+              const result = await res.text();
+              aiText = `✅ 已復原紀錄：${lastUndone.timeDisplay || ""}｜${
+                lastUndone.summary || "(無摘要)"
+              }\n🗂️ Sheet 回應：${result}`;
+              lastUndone = null; // 清空暫存
+            } catch (e) {
+              console.error("[Google Sheet 復原錯誤]", e);
+              aiText = "⚠️ 復原失敗，請檢查 Sheet";
+            }
+          } else {
+            aiText = "⚠️ 沒有可復原的紀錄";
+          }
+        }
           
         // -------- 2) 補記 --------
         else if (isBacklogMessage(userText)) {
@@ -480,16 +519,7 @@ export default async function handler(req, res) {
             start = new Date(y, m - 1, d, 0, 0, 0);
             end   = new Date(y, m - 1, d + 1, 0, 0, 0);
           }
-          
-              // 避免未來日期誤判成今年
-              if (customDate > nowTW) {
-                customDate.setFullYear(customDate.getFullYear() - 1);
-              }
-              start = new Date(customDate.setHours(0, 0, 0, 0));
-              end = new Date(customDate.setHours(23, 59, 59, 999));
-             }
-          }
-          
+                    
             // 2) 否則走原本 today/week/month
             else {
               if (userText.includes("週")) rangeType = "week";
