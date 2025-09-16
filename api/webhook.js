@@ -352,7 +352,7 @@ export default async function handler(req, res) {
           let targetLog = null;
           const parts = userText.split(" ");
           
-          // 1) 如果有指定時間字串
+          // 1) 有指定時間字串 → 尋找精確紀錄
           if (parts.length > 1) {
             const targetTime = parts[1].trim();
             targetLog = logs.find(
@@ -366,20 +366,21 @@ export default async function handler(req, res) {
             }
           }
           
-          // 2) 沒有指定時間 → 撤銷最後一筆
+          // 2) 沒指定時間 → 撤銷最後一筆
           if (!targetLog && parts.length === 1) {
             targetLog = [...logs].reverse().find((log) => !log.deleted);
           }
           
-          // 3) 找到目標紀錄 → 標記刪除 + 同步 Google Sheet
+          // 3) 找到 → 標記刪除 + 紀錄 lastUndone + 同步刪除 Google Sheet
           if (targetLog) {
             targetLog.deleted = true;
+            lastUndone = targetLog; // 暫存以便復原
             
             try {
               await fetch(process.env.SHEET_WEBHOOK_URL, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
+                body: JSON.stringify({                
                   action: "delete",
                   timeISO: targetLog.timeISO || "",
                   timeDisplay: targetLog.timeDisplay || "",
@@ -394,10 +395,36 @@ export default async function handler(req, res) {
             }`;
           }
         }
-          } else {
-            aiText = "⚠️ 沒有可撤銷的紀錄";
-          }
-        }
+
+// 復原
+else if (userText.trim().startsWith("復原")) {
+  if (lastUndone) {
+    lastUndone.deleted = false; // 復原標記
+    try {
+      await fetch(process.env.SHEET_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "restore",
+          timeISO: lastUndone.timeISO || "",
+          timeDisplay: lastUndone.timeDisplay || "",
+          summary: lastUndone.summary || "",
+          main: lastUndone.main || [],
+          tags: lastUndone.tags || [],
+          shortPhrase: lastUndone.shortPhrase || "",
+        }),
+      });
+    } catch (e) {
+      console.error("[Google Sheet 復原錯誤]", e);
+    }
+    aiText = `✅ 已復原紀錄：${lastUndone.timeDisplay || ""}｜${
+      lastUndone.summary || "(無摘要)"
+    }`;
+    lastUndone = null; // 清除暫存
+  } else {
+    aiText = "⚠️ 沒有可復原的紀錄";
+  }
+}
 
         // -------- 復原處理 --------
         else if (isRedoRequest(userText)) {
