@@ -598,9 +598,11 @@ export default async function handler(req, res) {
 
             const replyText = (r.choices[0]?.message?.content || "").trim();
             
-            let aiText = replyText.replace(/\n/g, "\n\n"); // 確保換行
-            aiText = aiText.replace(/\*\*/g, "");         // 去掉粗體符號
-            aiText = aiText.slice(0, 1900);               // 最後再切字數
+            // 修正換行問題：將單純的 \n 轉成 \n\n，確保在 LINE 中段落換行不會消失
+            const formattedReply = replyText.replace(/\n/g, "\n\n");            
+            aiText = aiText.replace(/\*\*/g, "");　// 清理 Markdown 粗體符號（**...** → ...）
+            aiText = formattedReply.slice(0, 1900);　// 確保不超過 LINE 限制
+            
           } catch (e) {
             console.error("[OpenAI 對話錯誤]", e);
             aiText = "我這邊忙線一下，等等再試。";
