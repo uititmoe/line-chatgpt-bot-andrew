@@ -351,38 +351,32 @@ export default async function handler(req, res) {
         if (isUndoRequest(userText)) {
           let targetLog = null;
           const parts = userText.split(" ");
-          const hasTargetTime = parts.length > 1;
-          const targetTime = hasTargetTime ? parts[1].trim() : null;
           
-          if (hasTargetTime) {
-            // 先比對 ISO
+          // 1) 如果有指定時間字串
+          if (parts.length > 1) {
+            const targetTime = parts[1].trim();
             targetLog = logs.find(
-              (log) => !log.deleted && log.timeISO && log.timeISO === targetTime
+              (log) =>
+                !log.deleted &&
+                (log.timeISO === targetTime || log.timeDisplay === targetTime)
             );
-            // 再比對顯示時間
-            if (!targetLog) {
-              targetLog = logs.find(
-                (log) => !log.deleted && log.timeDisplay === targetTime
-              );
-            }
-
-            // 有指定時間卻沒找到 → 回傳提示，不做 fallback
+            
             if (!targetLog) {
               aiText = `⚠️ 沒有找到時間為「${targetTime}」的紀錄`;
-              return;
             }
-          } else {
-            // 沒有指定時間 → 撤銷最後一筆未刪除
+          }
+          
+          // 2) 沒有指定時間 → 撤銷最後一筆
+          if (!targetLog && parts.length === 1) {
             targetLog = [...logs].reverse().find((log) => !log.deleted);
           }
           
+          // 3) 找到目標紀錄 → 標記刪除 + 同步 Google Sheet
           if (targetLog) {
             targetLog.deleted = true;
-            lastUndone = targetLog; // 存進暫存區
             
-            // Google Sheet 同步刪除
             try {
-              const res = await fetch(process.env.SHEET_WEBHOOK_URL, {
+              await fetch(process.env.SHEET_WEBHOOK_URL, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -391,14 +385,15 @@ export default async function handler(req, res) {
                   timeDisplay: targetLog.timeDisplay || "",
                 }),
               });
-              const result = await res.text();
-              aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
-                targetLog.summary || "(無摘要)"
-              }\n🗂️ Sheet 回應：${result}`;
             } catch (e) {
               console.error("[Google Sheet 撤銷錯誤]", e);
-              aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}（⚠️ Sheet 同步失敗）`;
             }
+            
+            aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
+              targetLog.summary || "(無摘要)"
+            }`;
+          }
+        }
           } else {
             aiText = "⚠️ 沒有可撤銷的紀錄";
           }
