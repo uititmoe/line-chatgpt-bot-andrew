@@ -622,9 +622,7 @@ else if (userText.trim().startsWith("復原")) {
             });
 
             const replyText = (r.choices[0]?.message?.content || "").trim();
-            
-            // 修正換行問題：將單純的 \n 轉成 \n\n，確保在 LINE 中段落換行不會消失
-            const formattedReply = replyText.replace(/\n/g, "\n\n");            
+                 
             aiText = aiText.replace(/\*\*/g, "");　// 清理 Markdown 粗體符號（**...** → ...）
             aiText = formattedReply.slice(0, 1900);　// 確保不超過 LINE 限制
             
