@@ -351,9 +351,10 @@ export default async function handler(req, res) {
         if (isUndoRequest(userText)) {
           let targetLog = null;
           const parts = userText.split(" ");
-          let targetTime = parts.length > 1 ? parts[1].trim() : null;
-
-          if (targetTime) {
+          const hasTargetTime = parts.length > 1;
+          const targetTime = hasTargetTime ? parts[1].trim() : null;
+          
+          if (hasTargetTime) {
             // 先比對 ISO
             targetLog = logs.find(
               (log) => !log.deleted && log.timeISO && log.timeISO === targetTime
@@ -364,17 +365,21 @@ export default async function handler(req, res) {
                 (log) => !log.deleted && log.timeDisplay === targetTime
               );
             }
-          }
 
-          // 沒指定時間 → 撤銷最後一筆未刪除
-          if (!targetLog && logs.length > 0) {
+            // 有指定時間卻沒找到 → 回傳提示，不做 fallback
+            if (!targetLog) {
+              aiText = `⚠️ 沒有找到時間為「${targetTime}」的紀錄`;
+              return;
+            }
+          } else {
+            // 沒有指定時間 → 撤銷最後一筆未刪除
             targetLog = [...logs].reverse().find((log) => !log.deleted);
           }
-
+          
           if (targetLog) {
             targetLog.deleted = true;
             lastUndone = targetLog; // 存進暫存區
-
+            
             // Google Sheet 同步刪除
             try {
               const res = await fetch(process.env.SHEET_WEBHOOK_URL, {
