@@ -349,38 +349,24 @@ export default async function handler(req, res) {
 
         // -------- 1) 撤銷（支援：撤銷 <時間戳>；否則撤銷最後一筆） --------
         if (isUndoRequest(userText)) {
-          let targetLog = null;
-          const parts = userText.split(" ");
+          let targetLog = null;        
+          const timeString = userText.replace(/^撤銷\s*/, "").trim(); // 拿掉「撤銷」兩字，保留後面整段（避免只取到第一個空格前）
           
-          // 1) 有指定時間字串 → 尋找精確紀錄
-          if (parts.length > 1) {
-            const targetTime = parts[1].trim();
-            targetLog = logs.find(
-              (log) =>
-                !log.deleted &&
-                (log.timeISO === targetTime || log.timeDisplay === targetTime)
-            );
-            
-            if (!targetLog) {
-              aiText = `⚠️ 沒有找到時間為「${targetTime}」的紀錄`;
-            }
+          // 沒指定 → 找最後一筆未刪除
+          if (!targetLog && logs.length > 0) {
+            targetLog = [...logs].reverse().find((log) => !log.deleted);     
           }
           
-          // 2) 沒指定時間 → 撤銷最後一筆
-          if (!targetLog && parts.length === 1) {
-            targetLog = [...logs].reverse().find((log) => !log.deleted);
-          }
-          
-          // 3) 找到 → 標記刪除 + 紀錄 lastUndone + 同步刪除 Google Sheet
           if (targetLog) {
+            // 軟刪除
             targetLog.deleted = true;
-            lastUndone = targetLog; // 暫存以便復原
             
+            // 同步刪除 Google Sheet
             try {
               await fetch(process.env.SHEET_WEBHOOK_URL, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({                
+                body: JSON.stringify({
                   action: "delete",
                   timeISO: targetLog.timeISO || "",
                   timeDisplay: targetLog.timeDisplay || "",
@@ -390,12 +376,12 @@ export default async function handler(req, res) {
               console.error("[Google Sheet 撤銷錯誤]", e);
             }
             
-            aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
-              targetLog.summary || "(無摘要)"
-            }`;
+            aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${targetLog.summary || "(無摘要)"}`;
+          } else {
+            aiText = `⚠️ 沒有找到時間為「${timeString}」的紀錄`;
           }
         }
-
+          
 // 復原
 else if (userText.trim().startsWith("復原")) {
   if (lastUndone) {
