@@ -260,7 +260,7 @@ async function generateShortPhrase(text, isBacklog = false) {
         {
           role: "system",
           content:
-            (SYSTEM_MESSAGE || "你是 Jean 的 LINE 助理，用繁體中文自然回應。") +
+            (SYSTEM_MESSAGE || "你是 Jean 的 LINE 助理，以和使用者對話的語氣用繁體中文自然回應。") +
             `
 任務指令：
 請根據輸入內容生成一句不超過 50 字的短語。
