@@ -347,52 +347,73 @@ export default async function handler(req, res) {
         let aiText = "我這邊忙線一下，等等再試。";
 
 
-        // -------- 1) 撤銷（支援：撤銷 <時間戳>；否則撤銷最後一筆） --------
-        if (isUndoRequest(userText)) {
-          let targetLog = null;
-          const timeString = userText.replace(/^撤銷\s*/, "").trim(); // 取出「撤銷」後面的時間字串
-          
-          if (timeString) {
-            // 嘗試找出符合的 log
-            targetLog = logs.find(
-              (log) =>
-                !log.deleted &&
-                (log.timeISO === timeString || log.timeDisplay === timeString)
-            );
-          }
-          
-          // 沒指定時間 → fallback 找最後一筆未刪除
-          if (!targetLog && logs.length > 0) {
-            targetLog = [...logs].reverse().find((log) => !log.deleted); 
-          }
-          
-          if (targetLog) {
-            targetLog.deleted = true;
-            
-            // 同步刪除 Google Sheet
-            try {
-              await fetch(process.env.SHEET_WEBHOOK_URL, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  action: "delete",
-                  timeISO: targetLog.timeISO || "",
-                  timeDisplay: targetLog.timeDisplay || "",
-                }),
-              });
-            } catch (e) {
-              console.error("[Google Sheet 撤銷錯誤]", e);
-            }
-            
-            aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
-              targetLog.summary || "(無摘要)"
-            }`;
-          
-          } else {
-            aiText = `⚠️ 沒有找到時間為「${timeString}」的紀錄`;
-              }
-        }
+// -------- 1) 撤銷（支援：撤銷 <時間戳 / 顯示時間>；否則撤銷最後一筆） --------
+if (isUndoRequest(userText)) {
+  const timeString = userText.replace(/^撤銷\s*/, "").trim(); // 取出「撤銷」後面的時間字串
+  let targetLog = null;
 
+  if (timeString) {
+    // 優先從 logs[] 找
+    targetLog = logs.find(
+      (log) =>
+        !log.deleted &&
+        (log.timeISO === timeString || log.timeDisplay === timeString)
+    );
+
+    // 找不到就直接傳給 Google Sheet，由 Sheet 端去比對刪除
+    if (!targetLog) {
+      try {
+        const resp = await fetch(process.env.SHEET_WEBHOOK_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "delete",
+            timeISO: timeString,     // 可能是 ISO
+            timeDisplay: timeString, // 也可能是 display
+          }),
+        });
+        const result = await resp.text();
+        aiText = `↩️ 嘗試撤銷紀錄（以時間「${timeString}」搜尋）\n🗂️ Sheet 回應：${result}`;
+      } catch (e) {
+        console.error("[Google Sheet 撤銷錯誤]", e);
+        aiText = "⚠️ 撤銷失敗，請檢查 Sheet Webhook";
+      }
+      return;
+    }
+  }
+
+  // 沒指定時間 → fallback 找最後一筆未刪除
+  if (!targetLog && logs.length > 0) {
+    targetLog = [...logs].reverse().find((log) => !log.deleted);
+  }
+
+  if (targetLog) {
+    targetLog.deleted = true;
+    lastUndone = targetLog; // 暫存，供「復原」用
+
+    // 同步刪除 Google Sheet
+    try {
+      const resp = await fetch(process.env.SHEET_WEBHOOK_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "delete",
+          timeISO: targetLog.timeISO || "",
+          timeDisplay: targetLog.timeDisplay || "",
+        }),
+      });
+      const result = await resp.text();
+      aiText = `↩️ 已撤銷紀錄：${targetLog.timeDisplay || ""}｜${
+        targetLog.summary || "(無摘要)"
+      }\n🗂️ Sheet 回應：${result}`;
+    } catch (e) {
+      console.error("[Google Sheet 撤銷錯誤]", e);
+      aiText = "⚠️ 撤銷失敗，請檢查 Sheet Webhook";
+    }
+  } else {
+    aiText = `⚠️ 沒有找到時間為「${timeString}」的紀錄`;
+  }
+}
           
 // 復原
 else if (userText.trim().startsWith("復原")) {
