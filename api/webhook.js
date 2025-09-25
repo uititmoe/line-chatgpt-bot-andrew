@@ -589,63 +589,50 @@ else if (userText.trim().startsWith("復原")) {
            }
          }
 
+
         // -------- 5) 總結（今日 / 本週 / 本月 / 指定單日） --------
         else if (isSummaryRequest(userText)) {
           let rangeType = "today";
-          let customDate = null;
-          let mdMatch = null;
-          
-          // 1) 判斷是否有單日日期（mm/dd）
-            const md = userText.match(/(\d{1,2})[\/\-](\d{1,2})/);
-            if (md) {
+          let start, end;
+
+          // 判斷是否有單日日期（mm/dd）
+          const md = userText.match(/(\d{1,2})[\/\-](\d{1,2})/);
+          if (md) {
             const now = new Date();
             let y = now.getFullYear();
             const m = parseInt(md[1], 10);
             const d = parseInt(md[2], 10);
 
-          // 總結日期跨年修正
-          const candidate = new Date(y, m - 1, d);
-          if (candidate > now && (candidate - now) / (1000 * 60 * 60 * 24) > 30) {
-            y = y - 1;
-          }
-          
+            // 總結日期跨年修正
+            const candidate = new Date(y, m - 1, d);
+            if (candidate > now && (candidate - now) / (1000 * 60 * 60 * 24) > 30) {
+              y = y - 1;
+            }
+
             start = new Date(y, m - 1, d, 0, 0, 0);
             end   = new Date(y, m - 1, d + 1, 0, 0, 0);
-          }
-                    
-            // 2) 否則走原本 today/week/month
-            else {
-              if (userText.includes("週")) rangeType = "week";
-              if (userText.includes("月")) rangeType = "month";
-              ({ start, end } = getDateRange(rangeType));
-            }
-            
-          // 取得範圍（以台灣時間）
-          let start, end;
-          if (rangeType === "custom" && customDate) {
-            start = new Date(customDate); start.setHours(0, 0, 0, 0);
-            end   = new Date(customDate); end.setHours(23, 59, 59, 999);
+            rangeType = "custom";
           } else {
+            if (userText.includes("週")) rangeType = "week";
+            if (userText.includes("月")) rangeType = "month";
             ({ start, end } = getDateRange(rangeType));
           }
 
           // 過濾範圍（排除撤銷、無 ISO 的模糊補記）
           const rangeLogs = logs.filter((log) => {
             if (log.deleted) return false;
-            
+
             if (log.timeISO) {
-               // 有 ISO → 精確判斷區間
-               const t = new Date(log.timeISO);
-               return t >= start && t < end;
+              const t = new Date(log.timeISO);
+              return t >= start && t < end;
             } else {
-               // 沒有 ISO（模糊時間）→ 一律保留
-               return true;
+              return true;
             }
           });
 
           const title =
-            rangeType === "custom" && customDate
-              ? `${customDate.getMonth() + 1}/${customDate.getDate()} 單日總結`
+            rangeType === "custom"
+              ? `${start.getMonth() + 1}/${start.getDate()} 單日總結`
               : rangeType === "today"
               ? "今日總結"
               : rangeType === "week"
@@ -655,12 +642,11 @@ else if (userText.trim().startsWith("復原")) {
           if (rangeLogs.length === 0) {
             aiText = `📊 ${title}\n（沒有紀錄）`;
           } else {
-            // 清單
             const list = rangeLogs.map(
               (log, i) =>
                 `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
             );
-
+            
             // 主模組統計
             const stats = {};
             rangeLogs.forEach((log) => {
@@ -672,7 +658,7 @@ else if (userText.trim().startsWith("復原")) {
           }
         }
 
-        // -------- 5) 一般對話（延續模式） --------
+        // -------- 6) 一般對話（延續模式） --------
         else {
           try {
             chatHistory.push({ role: "user", content: userText });
