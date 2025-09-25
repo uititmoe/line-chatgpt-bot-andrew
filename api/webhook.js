@@ -595,69 +595,64 @@ else if (userText.trim().startsWith("復原")) {
           let rangeType = "today";
           let start, end;
 
-          // 判斷是否有單日日期（mm/dd）
+          // 判斷日期
           const md = userText.match(/(\d{1,2})[\/\-](\d{1,2})/);
           if (md) {
             const now = new Date();
             let y = now.getFullYear();
             const m = parseInt(md[1], 10);
             const d = parseInt(md[2], 10);
-
-            // 總結日期跨年修正
-            const candidate = new Date(y, m - 1, d);
-            if (candidate > now && (candidate - now) / (1000 * 60 * 60 * 24) > 30) {
-              y = y - 1;
-            }
-
             start = new Date(y, m - 1, d, 0, 0, 0);
-            end   = new Date(y, m - 1, d + 1, 0, 0, 0);
-            rangeType = "custom";
+            end   = new Date(y, m - 1, d, 23, 59, 59, 999);
           } else {
             if (userText.includes("週")) rangeType = "week";
             if (userText.includes("月")) rangeType = "month";
             ({ start, end } = getDateRange(rangeType));
           }
 
-          // 過濾範圍（排除撤銷、無 ISO 的模糊補記）
-          const rangeLogs = logs.filter((log) => {
-            if (log.deleted) return false;
-
-            if (log.timeISO) {
-              const t = new Date(log.timeISO);
-              return t >= start && t < end;
-            } else {
-              return true;
-            }
-          });
-
-          const title =
-            rangeType === "custom"
-              ? `${start.getMonth() + 1}/${start.getDate()} 單日總結`
-              : rangeType === "today"
-              ? "今日總結"
-              : rangeType === "week"
-              ? "本週總結"
-              : "本月總結";
-
-          if (rangeLogs.length === 0) {
-            aiText = `📊 ${title}\n（沒有紀錄）`;
-          } else {
-            const list = rangeLogs.map(
-              (log, i) =>
-                `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
-            );
-            
-            // 主模組統計
-            const stats = {};
-            rangeLogs.forEach((log) => {
-              log.main.forEach((m) => (stats[m] = (stats[m] || 0) + 1));
+          try {
+            const resp = await fetch(process.env.SHEET_WEBHOOK_URL, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "query",
+                start: start.toISOString(),
+                end: end.toISOString()
+              }),
             });
-            const statLines = Object.entries(stats).map(([k, v]) => `${k}: ${v} 筆`);
+            const logs = await resp.json();
 
-            aiText = `📊 ${title}\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
+            const title =
+              md ? `${start.getMonth() + 1}/${start.getDate()} 單日總結`
+                 : rangeType === "today"
+                 ? "今日總結"
+                 : rangeType === "week"
+                 ? "本週總結"
+                 : "本月總結";
+        
+            if (!logs.length) {
+              aiText = `📊 ${title}\n（沒有紀錄）`;
+            } else {
+              const list = logs.map(
+                (log, i) =>
+                  `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ")}`
+              );
+              const stats = {};
+              logs.forEach((log) => {
+                log.main.forEach((m) => (stats[m] = (stats[m] || 0) + 1));
+              });
+              const statLines = Object.entries(stats).map(([k, v]) => `${k}: ${v} 筆`);
+
+              aiText = `📊 ${title}\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
+            }
+          } catch (e) {
+            console.error("[Google Sheet 總結錯誤]", e);
+            aiText = "⚠️ 總結失敗，請檢查 Sheet Webhook";
           }
         }
 
+
+          
         // -------- 6) 一般對話（延續模式） --------
         else {
           try {
