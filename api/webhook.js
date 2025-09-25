@@ -90,6 +90,9 @@ function isUndoRequest(text) {
 function isRedoRequest(text) {
   return text.includes("復原");
 }
+function isFixRequest(text) {
+  return text.startsWith("修正");
+}
 
 function isLogCandidate(text) {
   // 問句 → 當對話
@@ -199,10 +202,14 @@ async function classifyStateLog(text) {
     if (galleryKeywords.some((kw) => text.includes(kw))) {
       return { main: ["A. 藝廊工作"], tags: ["🧾 行政"] };
     }
-    if ((text.includes("辦公室") && officeActions.some((kw) => text.includes(kw))) || text.includes("洗衣店")) {
+    // 僅在同時包含「辦公室」+ 維運動作時，才判定為維運
+    if (text.includes("辦公室") && officeActions.some((kw) => text.includes(kw))) {
       return { main: ["E. 辦公室維運"], tags: ["🧹 環境整理"] };
     }
-
+    // 單純包含「辦公室」但沒有維運動作 → 不自動分類，交給 GPT fallback
+    if (text.includes("洗衣店")) {
+      return { main: ["E. 辦公室維運"], tags: ["🧹 環境整理"] };
+    }
     // 其他交給 GPT fallback
     const r = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -542,7 +549,47 @@ else if (userText.trim().startsWith("復原")) {
                    `${shortPhrase}`;
         }
 
-        // -------- 4) 總結（今日 / 本週 / 本月 / 指定單日） --------
+        // -------- 4)修正上一筆分類 --------
+        else if (isFixRequest(userText)) {
+           const fixText = userText.replace(/^修正\s*/, "").trim();
+           const mainMatch = fixText.match(/主模組\s*=\s*([^\s]+)/);
+           const tagsMatch = fixText.match(/輔助\s*=\s*(.+)/);
+
+           if (logs.length === 0) {
+             aiText = "⚠️ 沒有可修正的紀錄";
+           } else {
+             const targetLog = [...logs].reverse().find((log) => !log.deleted);
+
+             if (!targetLog) {
+               aiText = "⚠️ 找不到可修正的紀錄";
+             } else {
+               if (mainMatch) targetLog.main = [mainMatch[1]];
+               if (tagsMatch) {
+                 targetLog.tags = tagsMatch[1].split(/\s*\+\s*/);
+               }
+
+               // 同步更新 Google Sheet
+               try {
+                 await fetch(process.env.SHEET_WEBHOOK_URL, {
+                   method: "POST",
+                   headers: { "Content-Type": "application/json" },
+                   body: JSON.stringify({
+                     action: "update",
+                     timeISO: targetLog.timeISO,
+                     main: targetLog.main,
+                     tags: targetLog.tags,
+                   }),
+                 });
+               } catch (e) {
+                 console.error("[Google Sheet 修正錯誤]", e);
+               }
+
+               aiText = `📝 已修正紀錄：${targetLog.timeDisplay}\n📂 主模組：${targetLog.main.join(" + ")}\n🏷️ 輔助：${targetLog.tags.join(" + ")}`;
+             }
+           }
+         }
+
+        // -------- 5) 總結（今日 / 本週 / 本月 / 指定單日） --------
         else if (isSummaryRequest(userText)) {
           let rangeType = "today";
           let customDate = null;
