@@ -630,36 +630,48 @@ else if (userText.trim().startsWith("復原")) {
               }),
             });
 
-            const result = await resp.json();
-            const title =
-              md ? `${start.getMonth() + 1}/${start.getDate()} 單日總結`
-                 : rangeType === "today"
-                 ? "今日總結"
-                 : rangeType === "week"
-                 ? "本週總結"
-                 : "本月總結";
+            const text = await resp.text();
+            let result;
+            try {
+              result = JSON.parse(text);
+            } catch (e) {
+              console.error("[總結解析錯誤]", text);
+              aiText = "⚠️ 總結回傳格式錯誤，請檢查 Sheet Apps Script";
+              result = null;
+            }
 
-            if (!result.rows || !result.rows.length) {
-              aiText = `📊 ${title}\n（沒有紀錄）`;
-            } else {
-              // 清單
-              const list = result.rows.map(
-                (log, i) =>
-                  `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
-              );
+            if (result) {
+              const title =
+                md ? `${start.getMonth() + 1}/${start.getDate()} 單日總結`
+                   : rangeType === "today"
+                   ? "今日總結"
+                   : rangeType === "week"
+                   ? "本週總結"
+                   : "本月總結";
 
-              // 主模組統計
-              const statLines = Object.entries(result.stats).map(
-                ([k, v]) => `${k}: ${v} 筆`
-              );
-        
-              aiText = `📊 ${title}\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
+              if (!result.rows || !result.rows.length) {
+                aiText = `📊 ${title}\n（沒有紀錄）`;
+              } else {
+                // 清單
+                const list = result.rows.map(
+                  (log, i) =>
+                    `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
+                );
+
+                // 主模組統計
+                const statLines = Object.entries(result.stats).map(
+                  ([k, v]) => `${k}: ${v} 筆`
+                );
+
+                aiText = `📊 ${title}\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
+              }
             }
           } catch (e) {
             console.error("[Google Sheet 總結錯誤]", e);
             aiText = "⚠️ 總結失敗，請檢查 Sheet Webhook";
           }
         }
+
           
         // -------- 6) 一般對話（延續模式） --------
         else {
