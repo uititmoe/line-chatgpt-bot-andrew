@@ -602,6 +602,13 @@ else if (userText.trim().startsWith("復原")) {
             let y = now.getFullYear();
             const m = parseInt(md[1], 10);
             const d = parseInt(md[2], 10);
+
+            // 總結日期跨年修正
+            const candidate = new Date(y, m - 1, d);
+            if (candidate > now && (candidate - now) / (1000 * 60 * 60 * 24) > 30) {
+              y = y - 1;
+            }
+
             start = new Date(y, m - 1, d, 0, 0, 0);
             end   = new Date(y, m - 1, d, 23, 59, 59, 999);
             rangeType = "custom";
@@ -612,19 +619,18 @@ else if (userText.trim().startsWith("復原")) {
           }
 
           try {
-            // 🔄 改用 summary
+            // 🔎 呼叫 Google Sheet summary
             const resp = await fetch(process.env.SHEET_WEBHOOK_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 action: "summary",
                 start: start.toISOString(),
-                end: end.toISOString(),
+                end: end.toISOString()
               }),
             });
 
-            const result = await resp.json(); // { count, rows, stats }
-
+            const result = await resp.json();
             const title =
               md ? `${start.getMonth() + 1}/${start.getDate()} 單日總結`
                  : rangeType === "today"
@@ -633,15 +639,20 @@ else if (userText.trim().startsWith("復原")) {
                  ? "本週總結"
                  : "本月總結";
 
-            if (!result.rows.length) {
+            if (!result.rows || !result.rows.length) {
               aiText = `📊 ${title}\n（沒有紀錄）`;
             } else {
+              // 清單
               const list = result.rows.map(
                 (log, i) =>
                   `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
               );
-              const statLines = Object.entries(result.stats).map(([k, v]) => `${k}: ${v} 筆`);
 
+              // 主模組統計
+              const statLines = Object.entries(result.stats).map(
+                ([k, v]) => `${k}: ${v} 筆`
+              );
+        
               aiText = `📊 ${title}\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
             }
           } catch (e) {
@@ -649,8 +660,6 @@ else if (userText.trim().startsWith("復原")) {
             aiText = "⚠️ 總結失敗，請檢查 Sheet Webhook";
           }
         }
-
-
           
         // -------- 6) 一般對話（延續模式） --------
         else {
