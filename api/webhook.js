@@ -212,7 +212,7 @@ async function classifyStateLog(text) {
     }
     // 其他交給 GPT fallback
     const r = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o",
       temperature: 0,
       messages: [
         {
@@ -604,6 +604,7 @@ else if (userText.trim().startsWith("復原")) {
             const d = parseInt(md[2], 10);
             start = new Date(y, m - 1, d, 0, 0, 0);
             end   = new Date(y, m - 1, d, 23, 59, 59, 999);
+            rangeType = "custom";
           } else {
             if (userText.includes("週")) rangeType = "week";
             if (userText.includes("月")) rangeType = "month";
@@ -611,16 +612,18 @@ else if (userText.trim().startsWith("復原")) {
           }
 
           try {
+            // 🔄 改用 summary
             const resp = await fetch(process.env.SHEET_WEBHOOK_URL, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                action: "query",
+                action: "summary",
                 start: start.toISOString(),
-                end: end.toISOString()
+                end: end.toISOString(),
               }),
             });
-            const logs = await resp.json();
+
+            const result = await resp.json(); // { count, rows, stats }
 
             const title =
               md ? `${start.getMonth() + 1}/${start.getDate()} 單日總結`
@@ -629,19 +632,15 @@ else if (userText.trim().startsWith("復原")) {
                  : rangeType === "week"
                  ? "本週總結"
                  : "本月總結";
-        
-            if (!logs.length) {
+
+            if (!result.rows.length) {
               aiText = `📊 ${title}\n（沒有紀錄）`;
             } else {
-              const list = logs.map(
+              const list = result.rows.map(
                 (log, i) =>
-                  `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ")}`
+                  `${i + 1}. ${log.timeDisplay}｜${log.summary}｜${log.main.join(" + ")}｜${log.tags.join(" + ") || "無"}`
               );
-              const stats = {};
-              logs.forEach((log) => {
-                log.main.forEach((m) => (stats[m] = (stats[m] || 0) + 1));
-              });
-              const statLines = Object.entries(stats).map(([k, v]) => `${k}: ${v} 筆`);
+              const statLines = Object.entries(result.stats).map(([k, v]) => `${k}: ${v} 筆`);
 
               aiText = `📊 ${title}\n\n${list.join("\n")}\n\n📈 主模組統計：\n${statLines.join("\n")}`;
             }
